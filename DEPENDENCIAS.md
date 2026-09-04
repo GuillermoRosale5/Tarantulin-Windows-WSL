@@ -19,6 +19,28 @@ Los paquetes de Ubuntu y `uv` se instalan mediante `install.ps1`. `uv` obtiene
 MuJoCo Playground como la distribucion `playground` desde el commit fijado; no
 se crea ni se versiona un repositorio Git anidado.
 
+## Red preentrenada reproducible
+
+El repositorio incluye una única red de referencia en
+`pretrained/tarantulin_standup_fase2_45932544`. Es un checkpoint Orbax OCDBT
+creado con las versiones fijadas en este proyecto: fase 2, semilla 42 y paso
+45.932.544 del perfil `lite`. Sus archivos y configuraciones se validan mediante
+`SHA256SUMS` antes de abrirlos.
+
+```powershell
+.\tarantulin.ps1 view-pretrained
+```
+
+Este comando usa siempre ese paquete y no consulta
+`logs_tarantulin_mjx/ultima_run.txt`. En cambio, `view-results` y
+`visualizar_ultimo_checkpoint.sh` cargan el último checkpoint generado
+localmente; puede proceder de una ejecución parcial y no tiene por qué producir
+el mismo movimiento.
+
+Los checkpoints normales de entrenamiento continúan fuera de GitHub. La red
+preentrenada es una excepción deliberada y pequeña para que una instalación
+nueva pueda reproducir exactamente la misma simulación.
+
 ## Perfiles de computo en WSL
 
 | Perfil | Estado | Comportamiento |

@@ -44,8 +44,16 @@ select_from_list() {
 }
 
 visualizar_ultimo_checkpoint() {
-  echo "Abriendo ultimo checkpoint..."
+  echo "Abriendo ultimo checkpoint local (puede ser un entrenamiento parcial)..."
+  echo "Esta opcion sigue logs_tarantulin_mjx/ultima_run.txt; no usa la red publicada."
   exec ./scripts/tarantulin_wsl.sh view-results "$@"
+}
+
+visualizar_red_preentrenada() {
+  echo "Abriendo la red preentrenada recomendada..."
+  echo "Fase 2 | paso 45.932.544 | episodio 1500"
+  echo "Esta opcion no consulta logs_tarantulin_mjx/ultima_run.txt."
+  exec ./scripts/tarantulin_wsl.sh view-pretrained "$@"
 }
 
 visualizar_checkpoint_anterior() {
@@ -140,17 +148,19 @@ main() {
   echo "=============================================="
   echo "Visualizador TARANTULIN"
   echo "=============================================="
-  echo "  1) Visualizar ultimo checkpoint"
-  echo "  2) Visualizar checkpoint anterior"
-  echo "  3) Ver XML sin simular"
+  echo "  1) Visualizar red preentrenada recomendada (fase 2, paso 45.932.544)"
+  echo "  2) Visualizar ultimo checkpoint local (puede ser parcial)"
+  echo "  3) Visualizar checkpoint local anterior"
+  echo "  4) Ver XML sin simular"
   echo ""
 
   local choice
-  choice="$(select_from_list "Elige opcion [1-3]: " 3)"
+  choice="$(select_from_list "Elige opcion [1-4]: " 4)"
   case "${choice}" in
-    1) visualizar_ultimo_checkpoint "$@" ;;
-    2) visualizar_checkpoint_anterior "$@" ;;
-    3) visualizar_xml ;;
+    1) visualizar_red_preentrenada "$@" ;;
+    2) visualizar_ultimo_checkpoint "$@" ;;
+    3) visualizar_checkpoint_anterior "$@" ;;
+    4) visualizar_xml ;;
   esac
 }
 

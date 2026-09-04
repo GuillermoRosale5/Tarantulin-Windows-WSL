@@ -4,3 +4,7 @@
 *.xml text eol=lf
 *.ps1 text eol=crlf
 *.psm1 text eol=crlf
+pretrained/** -text
+pretrained/**/*.json text eol=lf
+pretrained/**/*.md text eol=lf
+pretrained/**/SHA256SUMS text eol=lf

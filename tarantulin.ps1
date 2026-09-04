@@ -46,6 +46,7 @@ Uso diario:
   .\tarantulin.ps1 test-mjx -- --steps 10
   .\tarantulin.ps1 train -- --background --perfil-ppo lite --fase-recompensa 1
   .\tarantulin.ps1 monitor
+  .\tarantulin.ps1 view-pretrained
   .\tarantulin.ps1 view-results -- --episode-length 1500
   .\tarantulin.ps1 stop
   .\tarantulin.ps1 pull-results

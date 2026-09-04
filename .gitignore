@@ -16,3 +16,9 @@ __pycache__/
 .ipynb_checkpoints/
 .DS_Store
 Thumbs.db
+
+# Excepcion controlada: la red preentrenada publicada forma parte del producto.
+pretrained/*
+!pretrained/
+!pretrained/tarantulin_standup_fase2_45932544/
+!pretrained/tarantulin_standup_fase2_45932544/**

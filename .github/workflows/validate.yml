@@ -27,6 +27,8 @@ jobs:
           test ! -d external
           test ! -d logs_tarantulin_mjx
           test ! -d .venv
+      - name: Pretrained model contract
+        run: bash tests/test_pretrained_model.sh
       - name: Run path safety
         run: |
           bash tests/test_run_path_safety.sh "$PWD"

@@ -36,6 +36,12 @@ Cuando termine, comprobamos el sistema:
 .\tarantulin.ps1 test-mjx -- --steps 10
 ```
 
+Y podemos abrir directamente la red que dejamos preparada en el repositorio:
+
+```powershell
+.\tarantulin.ps1 view-pretrained
+```
+
 Ese es el recorrido mínimo. Las secciones siguientes explican qué sucede, qué
 hacer si Windows pide reiniciar y cómo usar después el entrenamiento y el visor.
 
@@ -286,18 +292,70 @@ pasos, recompensa, velocidad, GPU, memoria, temperatura y checkpoints. El
 comando ocupa esa terminal hasta pulsar `Ctrl+C`; esto cierra únicamente el
 monitor y no detiene el entrenamiento.
 
-### Ventana 3D de MuJoCo
+### Red preentrenada incluida: la opción recomendada
 
-Cuando ya existe al menos un checkpoint:
+Para ver TARANTULIN funcionando sin depender de ningún entrenamiento local:
+
+```powershell
+.\tarantulin.ps1 view-pretrained
+```
+
+Este comando carga siempre la red de referencia incluida en el repositorio:
+
+- fase de recompensa `2`;
+- semilla `42`;
+- checkpoint exacto del paso `45.932.544`;
+- episodio de `1500` pasos.
+
+La selección está fijada por el propio comando. `view-pretrained` **nunca lee
+`logs_tarantulin_mjx/ultima_run.txt`** ni cambia porque hayamos empezado otro
+entrenamiento. Antes de abrir el visor también comprueba la integridad del
+paquete mediante `SHA256SUMS`. Es la opción adecuada para enseñar el movimiento
+de referencia y para comprobar una instalación recién hecha.
+
+Si queremos hacer toda la comprobación, incluida una simulación corta con JAX y
+MJX, pero sin abrir todavía la ventana:
+
+```powershell
+.\tarantulin.ps1 view-pretrained -- --dry-run
+```
+
+La red está avanzada, pero no representa un entrenamiento finalizado: el paso
+45.932.544 corresponde al 45,93 % del objetivo de 100 millones de pasos del
+perfil `lite`. Su evaluación guardada obtuvo una recompensa de `158.104767`.
+
+### Último checkpoint local
+
+Cuando hemos entrenado en este equipo y queremos inspeccionar el resultado más
+reciente de esa ejecución:
 
 ```powershell
 .\tarantulin.ps1 view-results -- --episode-length 1500
 ```
 
-Esto abre una ventana de MuJoCo mediante WSLg con un entorno independiente que
-usa la última política guardada. No es una cámara conectada a uno de los 512
-entornos internos del entrenamiento. Dentro del visor, `R` reinicia el episodio
-y cerrar la ventana termina solo la visualización.
+`view-results` y el script histórico `visualizar_ultimo_checkpoint.sh` buscan el
+último checkpoint **local**, siguiendo `logs_tarantulin_mjx/ultima_run.txt`. Ese
+checkpoint puede pertenecer a una prueba corta, a una ejecución interrumpida o
+a un entrenamiento todavía parcial; por eso su movimiento puede ser mucho peor
+que el de la red recomendada. Estos comandos nunca sustituyen ni actualizan la
+red preentrenada publicada.
+
+Ambos modos abren una ventana de MuJoCo mediante WSLg con un entorno
+independiente. No es una cámara conectada a uno de los 512 entornos internos del
+entrenamiento. Dentro del visor, `R` reinicia el episodio y cerrar la ventana
+termina solo la visualización.
+
+El menú histórico conserva todos los modos y deja la red recomendada como
+primera opción:
+
+```powershell
+.\tarantulin.ps1 shell
+./scripts/visualizar_tarantulin.sh
+```
+
+Escribimos `exit` al volver a la shell. La opción 1 abre la red preentrenada; la
+opción 2 abre el último checkpoint local, la 3 permite elegir uno local anterior
+y la 4 muestra un XML sin simular.
 
 El visor necesita memoria adicional. No abras varios visores y, en un equipo con
 poca RAM, detén primero el entrenamiento:
@@ -544,10 +602,13 @@ hiperparámetros, PPO y los nombres de los scripts históricos. La parte nueva s
 encarga de la instalación, las rutas, la selección del dispositivo y la
 seguridad de los procesos.
 
-No guardamos `.venv`, dependencias descargadas, logs ni checkpoints en GitHub
-porque pesan mucho. El entorno se reconstruye desde el lock; los logs y
-checkpoints se generan durante las ejecuciones y se exportan por separado.
-MuJoCo Playground se instala siempre desde el commit fijo
+No guardamos `.venv`, dependencias descargadas, logs ni los checkpoints
+generados por cada entrenamiento en GitHub. El entorno se reconstruye desde el
+lock; los logs y checkpoints locales se generan durante las ejecuciones y se
+exportan por separado. La única excepción es el paquete revisado de
+`pretrained/tarantulin_standup_fase2_45932544`: forma parte del sistema para que
+todos podamos reproducir la misma demostración, está fijado al paso 45.932.544 y
+lleva sus sumas SHA-256. MuJoCo Playground se instala siempre desde el commit fijo
 `9c2dce4a3519cd4bb9d299bf28a6ef3f5086844b`.
 
 ## Comandos que conviene recordar
@@ -555,6 +616,7 @@ MuJoCo Playground se instala siempre desde el commit fijo
 ```powershell
 .\tarantulin.ps1 doctor
 .\tarantulin.ps1 test-mjx -- --steps 10
+.\tarantulin.ps1 view-pretrained
 .\tarantulin.ps1 train -- --background --perfil-ppo lite --fase-recompensa 2
 .\tarantulin.ps1 monitor
 .\tarantulin.ps1 view-results -- --episode-length 1500
@@ -563,6 +625,10 @@ MuJoCo Playground se instala siempre desde el commit fijo
 .\tarantulin.ps1 path
 .\tarantulin.ps1 help
 ```
+
+Recordatorio importante: `view-pretrained` abre siempre la red publicada de
+fase 2 y paso 45.932.544. `view-results` abre el último checkpoint creado en
+este equipo y ese resultado puede estar incompleto.
 
 ## Nota final
 

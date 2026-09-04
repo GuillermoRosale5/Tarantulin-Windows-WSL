@@ -12,6 +12,9 @@ LAST_RUN="${LOGS_DIR}/ultima_run.txt"
 DEFAULT_RUN_PREFIX="TarantulinStandup"
 DEFAULT_NUM_TIMESTEPS=30000000
 DEFAULT_EPISODE_LENGTH=1000
+PRETRAINED_MODEL_DIR="${REPO_ROOT}/pretrained/tarantulin_standup_fase2_45932544"
+PRETRAINED_CHECKPOINT="${PRETRAINED_MODEL_DIR}/checkpoints/000045932544"
+PRETRAINED_EPISODE_LENGTH=1500
 
 export PATH="${HOME}/.local/bin:${PATH}"
 # shellcheck source=platform.sh
@@ -1551,6 +1554,73 @@ view_results() {
   uv_python "${cmd[@]}"
 }
 
+verify_pretrained_model() {
+  if [[ ! -d "${PRETRAINED_MODEL_DIR}" || -L "${PRETRAINED_MODEL_DIR}" ]]; then
+    echo "No encuentro el modelo preentrenado versionado: ${PRETRAINED_MODEL_DIR}" >&2
+    return 1
+  fi
+  if [[ ! -d "${PRETRAINED_CHECKPOINT}" || -L "${PRETRAINED_CHECKPOINT}" ]]; then
+    echo "Checkpoint preentrenado ausente o inseguro: ${PRETRAINED_CHECKPOINT}" >&2
+    return 1
+  fi
+  [[ -f "${PRETRAINED_MODEL_DIR}/SHA256SUMS" ]] || {
+    echo "Falta el manifiesto SHA-256 del modelo preentrenado." >&2
+    return 1
+  }
+  (
+    cd "${PRETRAINED_MODEL_DIR}"
+    sha256sum --quiet --check SHA256SUMS
+  ) || {
+    echo "La red preentrenada no coincide con el manifiesto versionado." >&2
+    return 1
+  }
+}
+
+view_pretrained() {
+  local -a viewer_args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        cat <<'EOF'
+Uso:
+  .\tarantulin.ps1 view-pretrained [-- --impl jax|warp] [-- --cpu] [-- --dry-run]
+
+Carga siempre la red de referencia versionada:
+  fase 2 · paso 45.932.544 · episodio 1500
+
+No consulta logs_tarantulin_mjx/ultima_run.txt. Para ver un checkpoint local usa
+"view-results" o "visualizar_ultimo_checkpoint.sh".
+EOF
+        return 0
+        ;;
+      --impl)
+        [[ $# -ge 2 ]] || {
+          echo "Falta el valor de --impl para view-pretrained." >&2
+          return 2
+        }
+        viewer_args+=("$1" "$2")
+        shift 2
+        ;;
+      --cpu|--dry-run)
+        viewer_args+=("$1")
+        shift
+        ;;
+      --checkpoint-path|--checkpoint-index|--previous-checkpoint|--episode-length)
+        echo "view-pretrained fija la red 45.932.544 y el episodio 1500; '$1' no se puede cambiar." >&2
+        return 2
+        ;;
+      *)
+        echo "Argumento no reconocido para view-pretrained: $1" >&2
+        return 2
+        ;;
+    esac
+  done
+  verify_pretrained_model
+  view_results "${viewer_args[@]}" \
+    --checkpoint-path "${PRETRAINED_CHECKPOINT}" \
+    --episode-length "${PRETRAINED_EPISODE_LENGTH}"
+}
+
 mini_sim() {
   local impl="jax"
   local episode_length="${DEFAULT_EPISODE_LENGTH}"
@@ -1625,6 +1695,7 @@ Uso:
   scripts/tarantulin_wsl.sh check-swap
   scripts/tarantulin_wsl.sh start-thermal-guard
   scripts/tarantulin_wsl.sh auto-clean-jit
+  scripts/tarantulin_wsl.sh view-pretrained [--impl jax|warp] [--cpu] [--dry-run]
   scripts/tarantulin_wsl.sh view-results [--cpu] [--previous-checkpoint] [--dry-run]
   scripts/tarantulin_wsl.sh mini-sim [--xml-path XML] [--reset-preset actual|suelo2|ideal|caida_lateral|boca_abajo] [--previous-checkpoint] [--dry-run]
   scripts/graficar_recompensas.sh [--show]     # genera una grafica por recompensas*.csv
@@ -1633,6 +1704,7 @@ Atajos Bash:
   scripts/lanzar_tarantulin.sh [opciones train]  # por defecto usa --perfil-ppo lite
   scripts/monitor_tarantulin.sh
   scripts/parar_tarantulin.sh
+  scripts/visualizar_red_preentrenada.sh [--dry-run]
   scripts/visualizar_ultimo_checkpoint.sh [opciones view-results]
   scripts/cambiar_fase_tarantulin.sh [1|2|3]
   scripts/minisimular_ultimo_checkpoint.sh [opciones mini-sim]
@@ -1664,6 +1736,7 @@ main() {
     check-swap) check_swap "$@" ;;
     start-thermal-guard) start_thermal_guard_current "$@" ;;
     auto-clean-jit) auto_clean_jit "$@" ;;
+    view-pretrained|visualizar-red) view_pretrained "$@" ;;
     view-results) view_results "$@" ;;
     mini-sim) mini_sim "$@" ;;
     *) usage; exit 1 ;;
