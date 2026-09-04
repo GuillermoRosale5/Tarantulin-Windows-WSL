@@ -179,8 +179,8 @@ print_ppo_profiles() {
   cat <<'EOF'
 Perfiles PPO disponibles:
   debug      5M steps   20 evals   512 envs   ep 1000   red 256-128       mb 4   upd 1   gamma 0.95   ent 0.015
-  lite       20M steps  40 evals   512 envs   ep 1500   red 256-256       mb 4   upd 2   gamma 0.95   ent 0.01   default
-  lite_fast  20M steps  40 evals   1024 envs  ep 1500   red 256-256       mb 4   upd 2   gamma 0.95   ent 0.01
+  lite       100M steps  200 evals  512 envs   ep 1500   red 256-256       mb 4   upd 2   gamma 0.95   ent 0.01   default
+  lite_fast  100M steps  200 evals  1024 envs  ep 1500   red 256-256       mb 4   upd 2   gamma 0.95   ent 0.01
   full       50M steps  200 evals  512 envs   ep 3000   red 512-256-128   mb 8   upd 2   gamma 0.97   ent 0.02
 
 Uso rapido:

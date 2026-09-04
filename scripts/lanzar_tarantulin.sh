@@ -71,8 +71,8 @@ elegir_perfil_ppo() {
   cat >&2 <<'EOF'
 Perfiles PPO:
   1) debug      5M steps, 20 evals, ep 1000, red 256-128       | prueba rapida
-  2) lite       20M steps, 40 evals, ep 1500, red 256-256       | recomendado
-  3) lite_fast  20M steps, 40 evals, ep 1500, red 256-256, 1024 envs
+  2) lite       100M steps, 200 evals, ep 1500, red 256-256      | recomendado
+  3) lite_fast  100M steps, 200 evals, ep 1500, red 256-256, 1024 envs
 
   full existe para runs finales: usa --perfil-ppo full si lo quieres.
 EOF
