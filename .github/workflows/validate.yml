@@ -1,0 +1,49 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.8"
+      - name: Reproducible dependency lock
+        run: uv lock --check
+      - name: Bash syntax
+        run: find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+      - name: Python syntax
+        run: python -m compileall -q tarantulin scripts
+      - name: Repository hygiene
+        run: |
+          test "$(tr -d '\r\n' < .tarantulin/source.marker)" = tarantulin-windows-source-v1
+          test ! -d external
+          test ! -d logs_tarantulin_mjx
+          test ! -d .venv
+      - name: Run path safety
+        run: |
+          bash tests/test_run_path_safety.sh "$PWD"
+          bash tests/test_process_identity.sh "$PWD"
+
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $errors = @()
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
+            $errors += $parseErrors
+          }
+          if ($errors.Count) { $errors | Format-List; exit 1 }

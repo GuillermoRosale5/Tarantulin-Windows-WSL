@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "distro": "Ubuntu-24.04",
+  "accelerator": "auto",
+  "runtimeBase": "~/.local/share/tarantulin-windows"
+}
