@@ -43,9 +43,10 @@ Primer uso:
 
 Uso diario:
   .\tarantulin.ps1 doctor
-  .\tarantulin.ps1 test-mjx
-  .\tarantulin.ps1 train --background --perfil-ppo lite
+  .\tarantulin.ps1 test-mjx -- --steps 10
+  .\tarantulin.ps1 train -- --background --perfil-ppo lite --fase-recompensa 1
   .\tarantulin.ps1 monitor
+  .\tarantulin.ps1 view-results -- --episode-length 1500
   .\tarantulin.ps1 stop
   .\tarantulin.ps1 pull-results
 
@@ -62,7 +63,7 @@ Opciones PowerShell:
   -EnableExperimentalAmdWsl  (no recomendado; AMD no esta validado en WSL)
 
 Para separar los argumentos Linux de opciones PowerShell se puede usar --:
-  .\tarantulin.ps1 train -- --num-envs 512 --background
+  .\tarantulin.ps1 train -- --background --num-envs 512 --fase-recompensa 1
 "@ | Write-Host
 }
 

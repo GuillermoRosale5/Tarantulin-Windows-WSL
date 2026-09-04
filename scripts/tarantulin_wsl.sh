@@ -186,7 +186,7 @@ Perfiles PPO disponibles:
 Uso rapido:
   ./scripts/lanzar_tarantulin.sh --perfil-ppo lite
   ./scripts/lanzar_tarantulin.sh --perfil-ppo debug
-  ./scripts/tarantulin_wsl.sh train --background --setup --perfil-ppo lite_fast
+  ./scripts/tarantulin_wsl.sh train --background --setup --perfil-ppo lite_fast --fase-recompensa 1
 
 Overrides siguen disponibles:
   --num-timesteps --num-envs --num-evals --episode-length --batch-size

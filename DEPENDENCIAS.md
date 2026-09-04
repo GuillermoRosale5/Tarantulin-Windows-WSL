@@ -24,13 +24,14 @@ se crea ni se versiona un repositorio Git anidado.
 | Perfil | Estado | Comportamiento |
 |---|---|---|
 | `auto` | Recomendado | Elige NVIDIA si `nvidia-smi` funciona; en otro caso CPU. |
-| `nvidia` | Soportado | Instala el extra CUDA fijado por MuJoCo Playground y exige backend JAX GPU. |
+| `nvidia` | Soportado | Instala el extra CUDA 12 de JAX fijado por este repositorio y exige backend JAX GPU. |
 | `cpu` | Soportado | Instala JAX CPU. Sirve para desarrollo y pruebas; no para simulacion masiva. |
 | `amd` | No habilitado/validado en WSL | Se rechaza salvo consentimiento `-EnableExperimentalAmdWsl`; requiere ROCm compatible instalado previamente. |
 | `intel` | No soportado en WSL | Se rechaza y recomienda CPU o Linux nativo experimental. |
 
-El proyecto fuerza `--impl jax`. Warp se excluye deliberadamente porque rompe
-la portabilidad y esta acoplado a NVIDIA.
+El proyecto ejecuta únicamente `--impl jax`. `warp-lang==1.11.0` permanece
+fijado como dependencia heredada del proyecto, pero la ruta `--impl warp` se
+rechaza: está acoplada a NVIDIA y rompería la portabilidad buscada.
 
 ## Fuentes oficiales de compatibilidad
 
