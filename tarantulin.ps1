@@ -44,11 +44,11 @@ Primer uso:
 Uso diario:
   .\tarantulin.ps1 doctor
   .\tarantulin.ps1 test-mjx -- --steps 10
-  .\tarantulin.ps1 train -- --background --perfil-ppo lite --fase-recompensa 1
-  .\tarantulin.ps1 monitor
-  .\tarantulin.ps1 view-pretrained
-  .\tarantulin.ps1 view-results -- --episode-length 1500
-  .\tarantulin.ps1 stop
+  .\tarantulin.ps1 entrenar -- --segundo-plano --perfil-ppo ligero --fase-recompensa 1
+  .\tarantulin.ps1 monitorizar
+  .\tarantulin.ps1 visualizar-red-preentrenada
+  .\tarantulin.ps1 visualizar-resultados -- --longitud-episodio 1500
+  .\tarantulin.ps1 parar
   .\tarantulin.ps1 pull-results
 
 Mantenimiento:
@@ -64,7 +64,7 @@ Opciones PowerShell:
   -EnableExperimentalAmdWsl  (no recomendado; AMD no esta validado en WSL)
 
 Para separar los argumentos Linux de opciones PowerShell se puede usar --:
-  .\tarantulin.ps1 train -- --background --num-envs 512 --fase-recompensa 1
+  .\tarantulin.ps1 entrenar -- --segundo-plano --num-envs 512 --fase-recompensa 1
 "@ | Write-Host
 }
 
@@ -290,7 +290,7 @@ if ($Command -eq "shell") {
   exit $LASTEXITCODE
 }
 
-$commandsWithoutAutoSync = @("monitor", "stop", "pull-results")
+$commandsWithoutAutoSync = @("monitorizar", "parar", "pull-results")
 if ($Command -notin $commandsWithoutAutoSync) {
   Write-Step "Sincronizando codigo Windows -> WSL"
   Invoke-NativeChecked -Executable "wsl.exe" -Arguments @(

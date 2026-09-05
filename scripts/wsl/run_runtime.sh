@@ -64,6 +64,6 @@ case "${command}" in
     ;;
   *)
     cd "${WORKSPACE}"
-    exec "${WORKSPACE}/scripts/tarantulin_wsl.sh" "${command}" "$@"
+    exec "${WORKSPACE}/scripts/tarantulin.sh" "${command}" "$@"
     ;;
 esac

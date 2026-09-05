@@ -24,18 +24,17 @@ import jax
 from brax.training.agents.ppo import networks as ppo_networks
 from brax.training.agents.ppo import train as ppo
 
-from mujoco_playground._src import wrapper
+from mujoco_playground import wrapper
 
-from tarantulin.hiperparametros import config_a_dict
-from tarantulin.hiperparametros import ppo_tarantulin_standup
-from tarantulin.hiperparametros import ppo_tarantulin_standup_debug
-from tarantulin.hiperparametros import ppo_tarantulin_standup_full
-from tarantulin.hiperparametros import ppo_tarantulin_standup_lite
-from tarantulin.hiperparametros import ppo_tarantulin_standup_lite_fast
-from tarantulin.reward_curriculum import aplicar_fase_curriculum_recompensa
-from tarantulin.tarantulin_mjx_env import TarantulinStandup
-from tarantulin.tarantulin_mjx_env import DEBUG_REWARD_VERSION
-from tarantulin.tarantulin_mjx_env import default_config
+from tarantulin.hiperparametros import configuracion_a_diccionario
+from tarantulin.hiperparametros import configuracion_ppo_completa
+from tarantulin.hiperparametros import configuracion_ppo_depuracion
+from tarantulin.hiperparametros import configuracion_ppo_ligera
+from tarantulin.hiperparametros import configuracion_ppo_ligera_rapida
+from tarantulin.curriculo_recompensas import aplicar_fase_curriculo_recompensa
+from tarantulin.entorno_tarantulin_mjx import TarantulinIncorporarse
+from tarantulin.entorno_tarantulin_mjx import VERSION_DIAGNOSTICO_RECOMPENSA
+from tarantulin.entorno_tarantulin_mjx import default_config
 
 
 warnings.filterwarnings(
@@ -227,7 +226,7 @@ CAMPOS_HISTORIAL_RECOMPENSAS = [
     "debug_action_scale",
     "debug_reward_scale",
     "debug_reward_clip_max",
-    # Metricas nuevas: rewards ponderadas y diagnostico de pose/altura.
+    # Métricas nuevas: recompensas ponderadas y diagnóstico de postura y altura.
     "pose_articular_reward_ponderado",
     "velocidad_lineal_cero_reward_ponderado",
     "velocidad_angular_cero_reward_ponderado",
@@ -239,7 +238,7 @@ CAMPOS_HISTORIAL_RECOMPENSAS = [
     "state_error_altura",
     "state_sigma_pose_actual",
     "state_sigma_altura_actual",
-    # Metricas del sistema pose-xml (reward curriculum v2026051903).
+    # Métricas del sistema de postura XML (currículo de recompensa v2026051903).
     "pose_imitacion_reward_ponderado",
     "pose_xml_final_reward_ponderado",
     "soporte_estatico_reward_filtrado_ponderado",
@@ -885,7 +884,7 @@ MAPA_METRICAS_RECOMPENSA = {
         "eval/episode_state/sigma_altura_actual",
         "episode/state/sigma_altura_actual",
     ),
-    # --- Metricas del sistema pose-xml (v2026051902) ---
+    # --- Métricas del sistema de postura XML (v2026051902) ---
     "pose_imitacion_reward_ponderado": (
         "eval/episode_pose_imitacion_reward_ponderado",
         "episode/pose_imitacion_reward_ponderado",
@@ -1309,7 +1308,7 @@ CLAVES_CONFIG_RECOMPENSA = [
     "tiempo_vivo_reward_max",
     "reward_clip_min",
     "reward_clip_max",
-    # Sistema pose-xml (v2026051902).
+    # Sistema de postura XML (v2026051902).
     "pose_imitacion_reward_weight",
     "pose_imitacion_sigma",
     "pose_xml_final_reward_weight",
@@ -1345,7 +1344,7 @@ def _assert_linux_filesystem(path: Path) -> None:
   resolved = path.resolve()
   if str(resolved).startswith("/mnt/"):
     raise RuntimeError(
-        f"No ejecutes runs pesadas en rutas montadas de Windows: {resolved}"
+        f"No ejecutes entrenamientos pesados en rutas montadas de Windows: {resolved}"
     )
 
 
@@ -1390,7 +1389,7 @@ _ACTIVACIONES_DISPONIBLES: dict[str, Any] = {
 }
 
 
-def _crear_network_factory(ppo_config):
+def _crear_fabrica_redes(ppo_config):
   """Crea la funcion de fabrica de redes PPO con la activacion configurada.
 
   Lee el campo network_factory.activacion_red para elegir la funcion de
@@ -1410,7 +1409,7 @@ def _resolver_checkpoint(path_str: str | None) -> Path | None:
     return None
   candidate = Path(path_str).resolve()
   if not candidate.exists():
-    raise FileNotFoundError(f"No existe el checkpoint/run: {candidate}")
+    raise FileNotFoundError(f"No existe el checkpoint o la ejecucion: {candidate}")
   if candidate.is_dir() and (candidate / "checkpoints").is_dir():
     candidate = candidate / "checkpoints"
   if candidate.is_dir():
@@ -1564,7 +1563,7 @@ def _guardar_config_recompensas(path: Path, env_config) -> None:
     writer.writeheader()
     writer.writerow(
         {
-            "debug_version_recompensa": DEBUG_REWARD_VERSION,
+            "debug_version_recompensa": VERSION_DIAGNOSTICO_RECOMPENSA,
             **{key: env_config.get(key, "") for key in env_config.keys()},
         }
     )
@@ -1574,7 +1573,9 @@ def _guardar_ultima_run(logdir: Path, run_dir: Path) -> None:
     logdir_resolved = logdir.resolve()
     run_resolved = run_dir.resolve()
     if run_resolved.parent != logdir_resolved:
-        raise RuntimeError(f"La run escapa del directorio de logs: {run_resolved}")
+        raise RuntimeError(
+            f"La ejecucion escapa del directorio de registros: {run_resolved}"
+        )
 
     # os.replace sustituye el enlace en vez de seguir un posible symlink
     # preexistente en ultima_run.txt.
@@ -1612,7 +1613,7 @@ def _abrir_csv_log(
     fieldnames: list[str],
     append: bool,
 ) -> tuple[Any, csv.DictWriter]:
-  """Abre un CSV de entrenamiento, aislando runs por defecto."""
+  """Abre un CSV de entrenamiento y separa las ejecuciones por defecto."""
 
   if path.exists() and path.stat().st_size > 0:
     with path.open(newline="", encoding="utf-8") as existing_file:
@@ -1630,7 +1631,7 @@ def _abrir_csv_log(
       reason = "cabecera antigua"
     else:
       backup_path = path.with_name(f"{path.stem}.previous_{timestamp}{path.suffix}")
-      reason = "run anterior"
+      reason = "ejecucion anterior"
     path.replace(backup_path)
     print(f"CSV de {reason} respaldado en: {backup_path}", flush=True)
 
@@ -1688,53 +1689,53 @@ def main() -> None:
     parser.add_argument("--num_updates_per_batch", type=int, default=None)
     parser.add_argument("--num_eval_envs", type=int, default=None)
     parser.add_argument(
-        "--perfil_ppo",
-        choices=["debug", "lite", "lite_fast", "full"],
-        default="lite",
-        help="Perfil de hiperparametros PPO: debug, lite, lite_fast o full.",
+        "--perfil-ppo",
+        dest="perfil_ppo",
+        choices=["depuracion", "ligero", "ligero_rapido", "completo"],
+        default="ligero",
+        help=(
+            "Perfil de hiperparametros PPO: depuracion, ligero, "
+            "ligero_rapido o completo."
+        ),
     )
     parser.add_argument(
-        "--intervalo_log_recompensas",
-        "--reward_log_policy_updates_interval",
+        "--intervalo-log-recompensas",
         type=int,
         default=None,
         dest="reward_log_policy_updates_interval",
     )
     parser.add_argument("--training_metrics_steps", type=int, default=None)
     parser.add_argument(
-        "--sin_metricas_recompensa_entrenamiento",
-        "--no_training_reward_metrics",
+        "--sin-metricas-recompensa-entrenamiento",
         action="store_true",
         dest="no_training_reward_metrics",
     )
     parser.add_argument(
-        "--metricas_recompensa_entrenamiento",
-        "--training_reward_metrics",
+        "--metricas-recompensa-entrenamiento",
         action="store_true",
         dest="training_reward_metrics",
-        help="Activa metricas de reward durante rollouts de entrenamiento. Es mas lento.",
+        help="Activa metricas de recompensa durante trayectorias de entrenamiento. Es mas lento.",
     )
     parser.add_argument(
-        "--metricas_fisicas_completas",
-        "--full_physical_metrics",
+        "--metricas-fisicas-completas",
         action="store_true",
         dest="full_physical_metrics",
-        help="Calcula el bloque completo de metricas fisicas por step. Usalo para depurar.",
+        help="Calcula el bloque completo de metricas fisicas por paso. Usalo para depurar.",
     )
     parser.add_argument(
-        "--curriculum_penalizaciones",
+        "--curriculo-penalizaciones",
+        dest="curriculo_penalizaciones",
         type=float,
         default=None,
-        help="Valor fijo k_c para escalar penalizaciones en esta run, entre 0 y 1.",
+        help="Valor fijo k_c para escalar penalizaciones en esta ejecucion, entre 0 y 1.",
     )
     parser.add_argument(
-        "--fase_recompensa",
-        "--reward_phase",
+        "--fase-recompensa",
         type=int,
         choices=[0, 1, 2, 3],
         default=0,
         dest="fase_recompensa",
-        help="Fase del curriculo de recompensa: 0 actual, 1 suelo, 2 levantarse, 3 caer estable.",
+        help="Fase del curriculo de recompensa: 0 historica, 1 mantener pose, 2 levantarse, 3 recuperarse de caidas.",
     )
     parser.add_argument("--impl", choices=["jax"], default="jax")
     parser.add_argument("--seed", type=int, default=42)
@@ -1746,8 +1747,9 @@ def main() -> None:
         "--reset_checkpoint",
         action="store_true",
         help=(
-            "Arranca desde cero aunque exista checkpoints/ en la run. "
-            "Si se usa con --run_name fijo, borra solo los checkpoints de esa run."
+            "Arranca desde cero aunque exista checkpoints/ en la ejecucion. "
+            "Si se usa con --run_name fijo, borra solo los checkpoints de esa "
+            "ejecucion."
         ),
     )
     parser.add_argument(
@@ -1766,17 +1768,21 @@ def main() -> None:
     base_logdir.mkdir(parents=True, exist_ok=True)
 
     now = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    exp_name = args.run_name or f"TarantulinStandup-{now}"
+    exp_name = args.run_name or f"TarantulinIncorporarse-{now}"
     if args.suffix and not args.run_name:
         exp_name += f"-{args.suffix}"
     exp_name = _validate_run_name(exp_name)
 
     run_candidate = base_logdir / exp_name
     if run_candidate.is_symlink():
-        raise RuntimeError(f"La run no puede ser un enlace simbolico: {run_candidate}")
+        raise RuntimeError(
+            f"La ejecucion no puede ser un enlace simbolico: {run_candidate}"
+        )
     run_dir = run_candidate.resolve()
     if run_dir.parent != base_logdir:
-        raise RuntimeError(f"La run escapa del directorio de logs: {run_dir}")
+        raise RuntimeError(
+            f"La ejecucion escapa del directorio de registros: {run_dir}"
+        )
     run_dir.mkdir(parents=True, exist_ok=True)
     _guardar_ultima_run(base_logdir, run_dir)
 
@@ -1786,18 +1792,18 @@ def main() -> None:
     _guardar_comando(run_dir / "comando.sh")
 
     env_config = default_config()
-    resumen_curriculum = aplicar_fase_curriculum_recompensa(
+    resumen_curriculum = aplicar_fase_curriculo_recompensa(
         env_config, args.fase_recompensa
     )
     env_config.impl = args.impl
-    if args.perfil_ppo == "debug":
-        ppo_config = ppo_tarantulin_standup_debug()
-    elif args.perfil_ppo == "lite":
-        ppo_config = ppo_tarantulin_standup_lite()
-    elif args.perfil_ppo == "lite_fast":
-        ppo_config = ppo_tarantulin_standup_lite_fast()
-    elif args.perfil_ppo == "full":
-        ppo_config = ppo_tarantulin_standup_full()
+    if args.perfil_ppo == "depuracion":
+        ppo_config = configuracion_ppo_depuracion()
+    elif args.perfil_ppo == "ligero":
+        ppo_config = configuracion_ppo_ligera()
+    elif args.perfil_ppo == "ligero_rapido":
+        ppo_config = configuracion_ppo_ligera_rapida()
+    elif args.perfil_ppo == "completo":
+        ppo_config = configuracion_ppo_completa()
     else:
         raise ValueError(f"Perfil PPO no reconocido: {args.perfil_ppo}")
 
@@ -1819,9 +1825,9 @@ def main() -> None:
             ppo_config[key] = value
     env_config.episode_length = int(ppo_config.episode_length)
     env_config.action_repeat = int(ppo_config.action_repeat)
-    if args.curriculum_penalizaciones is not None:
+    if args.curriculo_penalizaciones is not None:
         env_config.curriculum_penalizaciones = max(
-            0.0, min(float(args.curriculum_penalizaciones), 1.0)
+            0.0, min(float(args.curriculo_penalizaciones), 1.0)
         )
     env_config.log_full_metrics = bool(args.full_physical_metrics)
     if args.training_reward_metrics:
@@ -1845,20 +1851,25 @@ def main() -> None:
             "Prueba a ajustar --num_envs, --batch_size o --num_minibatches."
         )
 
-    env = TarantulinStandup(config=env_config)
-    eval_env = TarantulinStandup(config=env_config)
-    env_config_dict = config_a_dict(env_config)
+    env = TarantulinIncorporarse(config=env_config)
+    eval_env = TarantulinIncorporarse(config=env_config)
+    env_config_dict = configuracion_a_diccionario(env_config)
     if hasattr(env, "_ref_body_z"):
         env_config_dict["target_body_z_referencia"] = float(env._ref_body_z)
     _guardar_json(run_dir / "config_entorno.json", env_config_dict)
-    _guardar_json(run_dir / "hiperparametros.json", config_a_dict(ppo_config))
+    _guardar_json(
+        run_dir / "hiperparametros.json", configuracion_a_diccionario(ppo_config)
+    )
     _guardar_json(run_dir / "config_curriculum_recompensa.json", resumen_curriculum)
     _guardar_config_recompensas(run_dir / "config_recompensas.csv", env_config)
 
-    print("Run:", run_dir)
+    print("Ejecucion:", run_dir)
     print("XML entrenamiento:", env.xml_path)
-    print("Env Python:", Path(sys.modules[TarantulinStandup.__module__].__file__).resolve())
-    print("Debug version recompensa:", DEBUG_REWARD_VERSION)
+    print(
+        "Entorno Python:",
+        Path(sys.modules[TarantulinIncorporarse.__module__].__file__).resolve(),
+    )
+    print("Version de diagnostico de recompensa:", VERSION_DIAGNOSTICO_RECOMPENSA)
     print("Perfil PPO:", args.perfil_ppo)
     print(
         "Fase recompensa:",
@@ -1890,7 +1901,9 @@ def main() -> None:
     if ckpt_path.is_symlink():
         raise RuntimeError(f"checkpoints no puede ser un enlace simbolico: {ckpt_path}")
     if ckpt_path.resolve(strict=False).parent != run_dir:
-        raise RuntimeError(f"checkpoints escapa del directorio de la run: {ckpt_path}")
+        raise RuntimeError(
+            f"checkpoints escapa del directorio de la ejecucion: {ckpt_path}"
+        )
     if args.reset_checkpoint and args.load_checkpoint_path:
         raise ValueError("No uses --reset_checkpoint junto con --load_checkpoint_path.")
     if args.reset_checkpoint and ckpt_path.exists():
@@ -1905,7 +1918,7 @@ def main() -> None:
         print("Restaurando:", restore_checkpoint_path)
 
     training_params = dict(ppo_config)
-    network_factory = _crear_network_factory(ppo_config)
+    network_factory = _crear_fabrica_redes(ppo_config)
     training_params.pop("network_factory", None)
     training_params.pop("reward_log_policy_updates_interval", None)
     num_eval_envs = training_params.pop("num_eval_envs", 2)
@@ -2057,7 +2070,7 @@ def main() -> None:
                     )
                 else:
                     fila_recompensas["reward_total"] = ""
-            fila_recompensas["debug_version"] = str(DEBUG_REWARD_VERSION)
+            fila_recompensas["debug_version"] = str(VERSION_DIAGNOSTICO_RECOMPENSA)
             fila_recompensas["debug_episode_length"] = str(int(env_config.episode_length))
             fila_recompensas["debug_action_scale"] = f"{float(env_config.action_scale):.6f}"
             fila_recompensas["debug_reward_scale"] = f"{float(env_config.reward_scale):.6f}"

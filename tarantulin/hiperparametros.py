@@ -13,11 +13,6 @@ from typing import Any
 from ml_collections import config_dict
 
 
-MAX_EPISODE_SECONDS = 20.0
-DEFAULT_CTRL_DT = 0.004
-DEFAULT_EPISODE_LENGTH = int(MAX_EPISODE_SECONDS / DEFAULT_CTRL_DT)
-
-
 VERSIONES_ESPERADAS: dict[str, str] = {
     "jax": "0.6.2",
     "jaxlib": "0.6.2",
@@ -32,7 +27,7 @@ VERSIONES_ESPERADAS: dict[str, str] = {
 }
 
 
-def _ppo_base_config(
+def _crear_configuracion_base_ppo(
     *,
     num_timesteps: int,
     num_evals: int,
@@ -92,32 +87,32 @@ def _ppo_base_config(
           policy_obs_key="state",
           value_obs_key="state",
           # Nombre de la funcion de activacion para actor y critic.
-          # Opciones: "swish" (SiLU), "tanh", "relu". Swish es el default recomendado.
+          # Opciones: "swish" (SiLU), "tanh", "relu". Swish es el valor recomendado.
           activacion_red="swish",
       ),
   )
 
 
-# debug:
+# Diagnóstico:
 #   Perfil ultrarrapido para comprobar compilacion y tendencia inicial.
 #   No sirve para conclusiones finales.
 #
-# lite:
+# ligero:
 #   Perfil principal actual. Reduce pasos, acorta episodios, reduce
 #   evaluaciones y usa una red mas pequena para pose estatica/semi-estatica.
 #
-# lite_fast:
-#   Igual que lite, pero con 1024 entornos. Usalo si la GPU lo soporta.
+# ligero_rapido:
+#   Igual que ligero, pero con 1024 entornos. Usalo si la GPU lo soporta.
 #
-# full:
-#   Configuracion pesada anterior. Usala cuando la reward/fase ya este validada.
-# TODO: mas adelante se podria probar value_obs_key="privileged_state".
+# completo:
+#   Configuración pesada anterior. Úsala cuando la recompensa y la fase ya estén validadas.
+# Pendiente: más adelante se podría probar value_obs_key="privileged_state".
 
 
-def ppo_tarantulin_standup_debug() -> config_dict.ConfigDict:
-  """Perfil rapido para validar compilacion y direccion inicial de reward."""
+def configuracion_ppo_depuracion() -> config_dict.ConfigDict:
+  """Perfil rapido para validar compilacion y tendencia inicial de recompensa."""
 
-  return _ppo_base_config(
+  return _crear_configuracion_base_ppo(
       num_timesteps=5_000_000,
       num_evals=20,
       num_envs=512,
@@ -146,10 +141,10 @@ def ppo_tarantulin_standup_debug() -> config_dict.ConfigDict:
   )
 
 
-def ppo_tarantulin_standup_lite() -> config_dict.ConfigDict:
+def configuracion_ppo_ligera() -> config_dict.ConfigDict:
   """Perfil principal para iterar pose estable/semi-estatica con menor coste."""
 
-  return _ppo_base_config(
+  return _crear_configuracion_base_ppo(
       num_timesteps=100_000_000,
       num_evals=200,
       num_envs=512,
@@ -178,10 +173,10 @@ def ppo_tarantulin_standup_lite() -> config_dict.ConfigDict:
   )
 
 
-def ppo_tarantulin_standup_lite_fast() -> config_dict.ConfigDict:
-  """Perfil lite con 1024 entornos para exprimir mas paralelismo MJX."""
+def configuracion_ppo_ligera_rapida() -> config_dict.ConfigDict:
+  """Perfil ligero con 1024 entornos para exprimir mas paralelismo MJX."""
 
-  return _ppo_base_config(
+  return _crear_configuracion_base_ppo(
       num_timesteps=100_000_000,
       num_evals=200,
       num_envs=1024,
@@ -210,13 +205,14 @@ def ppo_tarantulin_standup_lite_fast() -> config_dict.ConfigDict:
   )
 
 
-def ppo_tarantulin_standup_full() -> config_dict.ConfigDict:
-  """Configuracion pesada anterior para runs finales."""
+def configuracion_ppo_completa() -> config_dict.ConfigDict:
+  """Configuracion pesada para ejecuciones finales."""
 
-  return _ppo_base_config(
-      # 512 envs reduce overhead PPO de ~53% a ~25%, wall_steps/s estimado ~800
-      # episode_length 3000 = 12s reales a ctrl_dt=0.004s.
-      # num_updates_per_batch=2 suficiente para tarea de pose estatica.
+  return _crear_configuracion_base_ppo(
+      # 512 entornos reducen la sobrecarga de PPO de ~53 % a ~25 %.
+      # Velocidad estimada: unos 800 pasos/s.
+      # episode_length 3000 equivale a 12 s reales con ctrl_dt=0.004 s.
+      # num_updates_per_batch=2 es suficiente para una tarea de postura estática.
       num_timesteps=50_000_000,
       num_evals=200,
       num_envs=512,
@@ -245,21 +241,15 @@ def ppo_tarantulin_standup_full() -> config_dict.ConfigDict:
   )
 
 
-def ppo_tarantulin_standup() -> config_dict.ConfigDict:
-  """Alias historico: por defecto usa el perfil lite."""
-
-  return ppo_tarantulin_standup_lite()
-
-
-def config_a_dict(obj: Any) -> Any:
+def configuracion_a_diccionario(obj: Any) -> Any:
   """Convierte ConfigDict/tuplas a tipos JSON simples."""
 
   if isinstance(obj, config_dict.ConfigDict):
-    return {key: config_a_dict(value) for key, value in obj.items()}
+    return {key: configuracion_a_diccionario(value) for key, value in obj.items()}
   if isinstance(obj, Mapping):
-    return {key: config_a_dict(value) for key, value in obj.items()}
+    return {key: configuracion_a_diccionario(value) for key, value in obj.items()}
   if isinstance(obj, tuple):
-    return [config_a_dict(value) for value in obj]
+    return [configuracion_a_diccionario(value) for value in obj]
   if isinstance(obj, list):
-    return [config_a_dict(value) for value in obj]
+    return [configuracion_a_diccionario(value) for value in obj]
   return obj

@@ -24,20 +24,20 @@ except ModuleNotFoundError as exc:
   )
   raise SystemExit(2) from exc
 
-from scripts.graficar_recompensas import DEFAULT_COLUMNS_ARG
+from scripts.graficar_recompensas import ARG_COLUMNAS_PREDETERMINADAS
 from scripts.graficar_recompensas import _filtrar_ultimo_segmento
-from scripts.graficar_recompensas import _has_data
-from scripts.graficar_recompensas import _legend_label
-from scripts.graficar_recompensas import _latest_run
-from scripts.graficar_recompensas import _pick_rows_for_plot
-from scripts.graficar_recompensas import _plot_style
-from scripts.graficar_recompensas import _resolve_columns
-from scripts.graficar_recompensas import _series
-from scripts.graficar_recompensas import _smooth
-from scripts.graficar_recompensas import _time_window_text
+from scripts.graficar_recompensas import _tiene_datos
+from scripts.graficar_recompensas import _etiqueta_leyenda
+from scripts.graficar_recompensas import _ultima_ejecucion
+from scripts.graficar_recompensas import _elegir_filas_grafica
+from scripts.graficar_recompensas import _estilo_grafica
+from scripts.graficar_recompensas import _resolver_columnas
+from scripts.graficar_recompensas import _serie
+from scripts.graficar_recompensas import _suavizar
+from scripts.graficar_recompensas import _texto_intervalo_temporal
 
 
-def _read_csv_live(path: Path) -> list[dict[str, str]]:
+def _leer_csv_directo(path: Path) -> list[dict[str, str]]:
   if not path.exists() or path.stat().st_size == 0:
     return []
   try:
@@ -47,82 +47,84 @@ def _read_csv_live(path: Path) -> list[dict[str, str]]:
     return []
 
 
-def _resolve_live_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+def _resolver_rutas_directo(args: argparse.Namespace) -> tuple[Path, Path]:
   if args.csv_path:
     csv_path = Path(args.csv_path)
     return csv_path.parent, csv_path
-  run_dir = Path(args.run_dir) if args.run_dir else _latest_run(Path(args.logs_dir))
+  run_dir = Path(args.run_dir) if args.run_dir else _ultima_ejecucion(Path(args.logs_dir))
   return run_dir, run_dir / "recompensas.csv"
 
 
-def _draw_waiting(ax, message: str) -> None:
+def _dibujar_espera(ax, message: str) -> None:
   ax.clear()
   ax.set_title(message)
   ax.grid(True, alpha=0.3)
 
 
-def _draw_plot(
+def _dibujar_grafica(
     ax,
     rows: list[dict[str, str]],
     csv_path: Path,
     run_dir: Path,
     args: argparse.Namespace,
 ) -> tuple[int, str]:
-  if args.segment == "last":
+  if args.segment == "ultimo":
     rows = _filtrar_ultimo_segmento(rows)
-  rows, source_used = _pick_rows_for_plot(rows, args.source, args.columns)
+  rows, origen_usado = _elegir_filas_grafica(rows, args.source, args.columns)
   if args.tail > 0:
     rows = rows[-args.tail :]
 
-  x_values = _series(rows, args.x)
-  if not _has_data(x_values):
-    _draw_waiting(ax, f"Esperando datos validos para eje X: {args.x}")
+  x_values = _serie(rows, args.x)
+  if not _tiene_datos(x_values):
+    _dibujar_espera(ax, f"Esperando datos validos para eje X: {args.x}")
     return 0, ""
 
   x_clean = [0.0 if value is None else value for value in x_values]
-  columns = _resolve_columns(rows, args.columns)
+  columns = _resolver_columnas(rows, args.columns)
 
   ax.clear()
   plotted = 0
   sample_row = rows[0]
   for column in columns:
-    values = _smooth(
-        _series(rows, column, unidades_recompensa=args.unidades_recompensa),
+    values = _suavizar(
+        _serie(rows, column, unidades_recompensa=args.unidades_recompensa),
         args.smooth,
     )
-    if not _has_data(values):
+    if not _tiene_datos(values):
       continue
     y = [float("nan") if value is None else value for value in values]
     ax.plot(
         x_clean,
         y,
-        label=_legend_label(sample_row, column),
-        **_plot_style(column),
+        label=_etiqueta_leyenda(sample_row, column),
+        **_estilo_grafica(column),
     )
     plotted += 1
 
   if plotted == 0:
-    _draw_waiting(ax, f"Esperando columnas de recompensa con datos en {csv_path.name}")
+    _dibujar_espera(ax, f"Esperando columnas de recompensa con datos en {csv_path.name}")
     return 0, ""
 
-  time_text = _time_window_text(csv_path, run_dir, rows)
+  time_text = _texto_intervalo_temporal(csv_path, run_dir, rows)
   ax.set_title(
       f"Recompensas en directo - {run_dir.name} / {csv_path.name}\n"
-      f"{time_text} | origen={source_used}"
+      f"{time_text} | origen={origen_usado}"
   )
   ax.set_xlabel(args.x)
   unidades_y = (
       "recompensa PPO escalada"
-      if args.unidades_recompensa == "scaled"
-      else "recompensa raw"
+      if args.unidades_recompensa == "escaladas"
+      else "recompensa bruta"
   )
-  ax.set_ylabel(f"reward ponderada ({unidades_y}); penalties dibujadas en negativo")
+  ax.set_ylabel(
+      f"recompensa ponderada ({unidades_y}); penalizaciones dibujadas en negativo"
+  )
   ax.grid(True, alpha=0.3)
   ax.legend(loc="best", fontsize="small", ncols=3)
   return plotted, time_text
 
 
-def _last_nonempty(rows: list[dict[str, str]], key: str) -> str:
+def _ultimo_no_vacio(rows: list[dict[str, str]], key: str) -> str:
   for row in reversed(rows):
     value = row.get(key, "")
     if value not in ("", None):
@@ -130,19 +132,19 @@ def _last_nonempty(rows: list[dict[str, str]], key: str) -> str:
   return ""
 
 
-def _status_line(rows: list[dict[str, str]], csv_path: Path, plotted: int) -> str:
+def _linea_estado(rows: list[dict[str, str]], csv_path: Path, plotted: int) -> str:
   if not rows:
     return f"Esperando {csv_path}..."
   parts = [
       f"filas={len(rows)}",
       f"curvas={plotted}",
-      f"steps={_last_nonempty(rows, 'num_steps')}",
+      f"pasos={_ultimo_no_vacio(rows, 'num_steps')}",
   ]
-  reward_total = _last_nonempty(rows, "reward_total")
-  positive_reward = _last_nonempty(rows, "positive_reward")
-  penalties = _last_nonempty(rows, "penalties")
-  fase = _last_nonempty(rows, "fase_curriculum_recompensa")
-  nombre_fase = _last_nonempty(rows, "nombre_curriculum_recompensa")
+  reward_total = _ultimo_no_vacio(rows, "reward_total")
+  positive_reward = _ultimo_no_vacio(rows, "positive_reward")
+  penalties = _ultimo_no_vacio(rows, "penalties")
+  fase = _ultimo_no_vacio(rows, "fase_curriculum_recompensa")
+  nombre_fase = _ultimo_no_vacio(rows, "nombre_curriculum_recompensa")
   if reward_total:
     parts.append(f"reward_total={reward_total}")
   if positive_reward:
@@ -158,55 +160,71 @@ def main() -> None:
   parser = argparse.ArgumentParser(
       description="Muestra en directo la evolucion de recompensas desde recompensas.csv."
   )
-  parser.add_argument("--logs_dir", default="logs_tarantulin_mjx")
-  parser.add_argument("--run_dir", default=None)
-  parser.add_argument("--csv_path", default=None)
+  parser.add_argument("--directorio-registros", dest="logs_dir", default="logs_tarantulin_mjx")
+  parser.add_argument("--directorio-ejecucion", dest="run_dir", default=None)
+  parser.add_argument("--ruta-csv", dest="csv_path", default=None)
   parser.add_argument(
-      "--x",
+      "--eje-x",
+      dest="x",
       choices=["num_steps", "elapsed_seconds", "elapsed_hours", "percent"],
       default="num_steps",
   )
-  parser.add_argument("--columns", default=DEFAULT_COLUMNS_ARG)
-  parser.add_argument("--source", choices=["eval", "train", "all"], default="all")
-  parser.add_argument("--segment", choices=["last", "all"], default="last")
-  parser.add_argument("--smooth", type=int, default=3)
   parser.add_argument(
-      "--unidades_recompensa",
-      "--reward_units",
+      "--columnas", dest="columns", default=ARG_COLUMNAS_PREDETERMINADAS
+  )
+  parser.add_argument(
+      "--origen",
+      dest="source",
+      choices=["evaluacion", "entrenamiento", "todos"],
+      default="todos",
+  )
+  parser.add_argument(
+      "--segmento",
+      dest="segment",
+      choices=["ultimo", "todos"],
+      default="ultimo",
+  )
+  parser.add_argument("--suavizado", dest="smooth", type=int, default=3)
+  parser.add_argument(
+      "--unidades-recompensa",
       dest="unidades_recompensa",
-      choices=["scaled", "raw"],
-      default="scaled",
+      choices=["escaladas", "brutas"],
+      default="escaladas",
       help=(
-          "scaled muestra las contribuciones ya multiplicadas por reward_scale; "
-          "raw muestra las sumas internas sin reward_scale."
+          "escaladas muestra las contribuciones ya multiplicadas por reward_scale; "
+          "brutas muestra las sumas internas sin reward_scale."
       ),
   )
-  parser.add_argument("--interval", type=float, default=5.0)
+  parser.add_argument("--intervalo", dest="interval", type=float, default=5.0)
   parser.add_argument(
-      "--tail",
+      "--ultimas-filas",
+      dest="tail",
       type=int,
       default=300,
       help="Numero maximo de filas recientes a dibujar. Usa 0 para todo el CSV.",
   )
   parser.add_argument(
-      "--output",
+      "--salida",
+      dest="output",
       default=None,
       help="PNG que se sobrescribe en cada refresco. Opcional.",
   )
   parser.add_argument(
-      "--no_window",
+      "--sin-ventana",
       action="store_true",
-      help="No abre ventana; solo actualiza --output e imprime estado.",
+      dest="no_window",
+      help="No abre ventana; solo actualiza --salida e imprime el estado.",
   )
   parser.add_argument(
-      "--once",
+      "--una-vez",
       action="store_true",
+      dest="once",
       help="Hace un unico refresco y termina. Util para probar o generar PNG puntual.",
   )
   args = parser.parse_args()
 
   if args.no_window and not args.output:
-    raise SystemExit("--no_window necesita --output para poder ver algo.")
+    raise SystemExit("--sin-ventana necesita --salida para poder ver algo.")
 
   show_window = not args.no_window
   if show_window:
@@ -220,18 +238,18 @@ def main() -> None:
   last_mtime = None
   try:
     while True:
-      run_dir, csv_path = _resolve_live_paths(args)
-      rows = _read_csv_live(csv_path)
+      run_dir, csv_path = _resolver_rutas_directo(args)
+      rows = _leer_csv_directo(csv_path)
       mtime = csv_path.stat().st_mtime if csv_path.exists() else None
       should_redraw = mtime != last_mtime or show_window
 
       if should_redraw:
         last_mtime = mtime
         if not rows:
-          _draw_waiting(ax, f"Esperando datos en {csv_path}")
+          _dibujar_espera(ax, f"Esperando datos en {csv_path}")
           plotted = 0
         else:
-          plotted, _ = _draw_plot(ax, rows, csv_path, run_dir, args)
+          plotted, _ = _dibujar_grafica(ax, rows, csv_path, run_dir, args)
 
         fig.tight_layout()
         if args.output:
@@ -242,7 +260,7 @@ def main() -> None:
           fig.canvas.draw_idle()
           plt.pause(0.05)
 
-        print(_status_line(rows, csv_path, plotted), flush=True)
+        print(_linea_estado(rows, csv_path, plotted), flush=True)
         if args.once:
           break
 

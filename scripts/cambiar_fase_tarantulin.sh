@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 LOGS_DIR="${REPO_ROOT}/logs_tarantulin_mjx"
-LAST_RUN="${LOGS_DIR}/ultima_run.txt"
-PHASE="${1:-}"
-STOP_CURRENT=1
+ULTIMA_EJECUCION="${LOGS_DIR}/ultima_run.txt"
+FASE="${1:-}"
+PARAR_ACTUAL=1
 
 usage() {
   cat <<'EOF'
@@ -19,24 +19,24 @@ Fases:
   3  recuperar_desde_caida
 
 Opciones:
-  --no-stop   solo escribe la solicitud; no para el entrenamiento actual
+  --no-parar   solo escribe la solicitud; no para el entrenamiento actual
 
-Este script esta pensado para usarse con curriculum_auto_tarantulin.sh.
-Escribe fase_solicitada.txt en la ultima run y, por defecto, para el chunk
+Este script esta pensado para usarse con curriculo_automatico_tarantulin.sh.
+Escribe fase_solicitada.txt en la ultima ejecucion y, por defecto, para el bloque
 actual para que el supervisor relance inmediatamente con la fase elegida.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --no-stop) STOP_CURRENT=0; shift ;;
+    --no-parar) PARAR_ACTUAL=0; shift ;;
     --help|-h) usage; exit 0 ;;
-    1|2|3) PHASE="$1"; shift ;;
+    1|2|3) FASE="$1"; shift ;;
     *) echo "Argumento no reconocido: $1" >&2; usage; exit 1 ;;
   esac
 done
 
-choose_phase() {
+elegir_fase() {
   cat >&2 <<'EOF'
 Cambiar fase curricular:
   1) mantener_pose_xml
@@ -51,43 +51,43 @@ EOF
   esac
 }
 
-if [[ -z "${PHASE}" ]]; then
+if [[ -z "${FASE}" ]]; then
   if [[ -t 0 && -t 1 ]]; then
-    PHASE="$(choose_phase)"
+    FASE="$(elegir_fase)"
   else
     echo "Indica fase 1, 2 o 3." >&2
     exit 1
   fi
 fi
 
-if [[ ! -f "${LAST_RUN}" ]]; then
-  echo "No encuentro ${LAST_RUN}; no se cual es la ultima run." >&2
+if [[ ! -f "${ULTIMA_EJECUCION}" ]]; then
+  echo "No encuentro ${ULTIMA_EJECUCION}; no se cual es la ultima ejecucion." >&2
   exit 1
 fi
 
-RUN_DIR="$(<"${LAST_RUN}")"
-if [[ ! -d "${RUN_DIR}" ]]; then
-  echo "La ultima run no existe: ${RUN_DIR}" >&2
+DIRECTORIO_EJECUCION="$(<"${ULTIMA_EJECUCION}")"
+if [[ ! -d "${DIRECTORIO_EJECUCION}" ]]; then
+  echo "La ultima ejecucion no existe: ${DIRECTORIO_EJECUCION}" >&2
   exit 1
 fi
 
-printf '%s\n' "${PHASE}" > "${RUN_DIR}/fase_solicitada.txt"
-python3 - "${RUN_DIR}/fase_solicitada.json" "${PHASE}" <<'PY'
+printf '%s\n' "${FASE}" > "${DIRECTORIO_EJECUCION}/fase_solicitada.txt"
+python3 - "${DIRECTORIO_EJECUCION}/fase_solicitada.json" "${FASE}" <<'PY'
 import json
 import sys
 from datetime import datetime
 
-path, phase = sys.argv[1:]
-names = {
+ruta, fase = sys.argv[1:]
+nombres = {
     "1": "mantener_pose_xml",
     "2": "llegar_desde_suelo",
     "3": "recuperar_desde_caida",
 }
-with open(path, "w", encoding="utf-8") as f:
+with open(ruta, "w", encoding="utf-8") as f:
     json.dump(
         {
-            "fase_solicitada": int(phase),
-            "nombre": names[str(phase)],
+            "fase_solicitada": int(fase),
+            "nombre": nombres[str(fase)],
             "timestamp": datetime.now().isoformat(timespec="seconds"),
         },
         f,
@@ -96,11 +96,11 @@ with open(path, "w", encoding="utf-8") as f:
     )
 PY
 
-echo "Solicitud escrita: fase ${PHASE} en ${RUN_DIR}"
+echo "Solicitud escrita: fase ${FASE} en ${DIRECTORIO_EJECUCION}"
 
-if (( STOP_CURRENT == 1 )); then
+if (( PARAR_ACTUAL == 1 )); then
   echo "Parando entrenamiento actual para que el supervisor relance la fase..."
-  "${SCRIPT_DIR}/tarantulin_wsl.sh" stop || true
+  "${SCRIPT_DIR}/tarantulin.sh" parar || true
 else
-  echo "No paro el entrenamiento actual; el cambio se aplicara cuando termine el chunk."
+  echo "No paro el entrenamiento actual; el cambio se aplicara cuando termine el bloque."
 fi

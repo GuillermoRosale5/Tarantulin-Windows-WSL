@@ -14,14 +14,14 @@ dentro de Ubuntu.
 > directamente en Ubuntu, usa
 > [Tarantulin-Linux-WSL](https://github.com/GuillermoRosale5/Tarantulin-Linux-WSL).
 
-## Qué sistema estoy eligiendo
+## Organización de las dos versiones
 
 | Versión | Dónde guardamos y editamos el código | Dónde se calcula |
 |---|---|---|
 | **Este repositorio: Windows + WSL** | En una carpeta normal de Windows | En una copia automática dentro de WSL2 |
 | **Ubuntu nativo / WSL directo** | En una única carpeta dentro de Ubuntu | En esa misma carpeta Linux |
 
-## Si solo queremos empezar
+## Puesta en marcha rápida
 
 Abrimos PowerShell en una carpeta Windows vacía y ejecutamos el instalador:
 
@@ -39,7 +39,7 @@ Cuando termine, comprobamos el sistema:
 Y podemos abrir directamente la red que dejamos preparada en el repositorio:
 
 ```powershell
-.\tarantulin.ps1 view-pretrained
+.\tarantulin.ps1 visualizar-red-preentrenada
 ```
 
 Ese es el recorrido mínimo. Las secciones siguientes explican qué sucede, qué
@@ -61,11 +61,26 @@ La carpeta Windows es la que se edita y se sube a GitHub. La copia Linux es una
 zona de trabajo automática: contiene el entorno Python, los logs y los
 checkpoints, pero no tenemos que mantenerla nosotros.
 
+La parte desarrollada específicamente para TARANTULIN utiliza nombres en
+español: el entorno, el currículo de recompensas, los perfiles PPO, los
+comandos de entrenamiento y sus lanzadores. Los nombres antiguos no se
+mantienen mediante archivos puente. Si un archivo se ha renombrado, el nombre
+anterior deja de existir. Algunos ejemplos son `entorno_tarantulin_mjx.py`,
+`curriculo_recompensas.py`, la clase `TarantulinIncorporarse` y los perfiles
+`depuracion`, `ligero`, `ligero_rapido` y `completo`.
+
+MuJoCo, MJX, JAX, Brax y Orbax conservan sus nombres y sus interfaces
+originales. Por eso dentro del código continúan apareciendo contratos como
+`MjxEnv`, `default_config`, `reset`, `step`, las claves de configuración de
+Brax PPO y el formato de checkpoint de Orbax. Mantener esta parte sin una
+traducción artificial permite comparar nuestra implementación con los
+repositorios de los que procede y actualizar las dependencias con menos riesgo.
+
 Editamos siempre la carpeta Windows. Si abrimos `tarantulin.ps1 shell`, la usamos
 solo para diagnóstico: la siguiente sincronización puede reemplazar cualquier
 cambio de código hecho directamente en la copia WSL.
 
-## Qué necesitas antes de empezar
+## Requisitos previos
 
 - Windows 10 u 11 de 64 bits con virtualización disponible.
 - Conexión a Internet durante la primera instalación.
@@ -127,7 +142,7 @@ Si quieres exigir NVIDIA desde el primer momento, usa esta variante:
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/GuillermoRosale5/Tarantulin-Windows-WSL/main/scripts/bootstrap_windows.ps1'))) -Accelerator nvidia"
 ```
 
-### Si Windows pide reiniciar o Ubuntu pide un usuario
+### Reinicio de Windows y creación del usuario de Ubuntu
 
 Es normal que una instalación completamente nueva se detenga una vez.
 
@@ -166,7 +181,7 @@ git clone https://github.com/GuillermoRosale5/Tarantulin-Windows-WSL.git .
 En un equipo sin NVIDIA sustituimos `nvidia` por `cpu`. El resultado es el mismo;
 esta ruta simplemente deja el paso de Git visible.
 
-## Si ya habías clonado el repositorio
+## Instalación sobre una copia ya clonada
 
 Abre PowerShell dentro de la carpeta del proyecto y ejecuta:
 
@@ -191,7 +206,7 @@ En WSL, AMD continúa siendo una ruta experimental e Intel GPU no es compatible
 con las versiones de JAX usadas por este proyecto. La explicación técnica está
 en [DEPENDENCIAS.md](DEPENDENCIAS.md).
 
-## Cómo sabemos que la instalación ha terminado bien
+## Comprobación de la instalación
 
 Al final aparecerá un mensaje indicando que la instalación ha terminado.
 Después ejecutamos las dos comprobaciones principales:
@@ -222,7 +237,7 @@ test-mjx OK.
 La primera prueba puede tardar un poco aunque parezca parada: JAX está compilando
 la simulación por primera vez.
 
-## Antes de entrenar: perfiles y fases
+## Perfiles PPO y fases de recompensa
 
 Podemos consultar lo que existe sin memorizarlo:
 
@@ -235,13 +250,13 @@ Perfiles principales:
 
 | Perfil | Pasos | Entornos | Para qué lo usamos |
 |---|---:|---:|---|
-| `debug` | 5 millones | 512 | Primer entrenamiento de prueba |
-| `lite` | 100 millones | 512 | Perfil principal actual |
-| `lite_fast` | 100 millones | 1024 | Más entornos; necesita más memoria de GPU |
-| `full` | 50 millones | 512 | Red y episodios más grandes |
+| `depuracion` | 5 millones | 512 | Primer entrenamiento de prueba |
+| `ligero` | 100 millones | 512 | Perfil principal actual |
+| `ligero_rapido` | 100 millones | 1024 | Más entornos; necesita más memoria de GPU |
+| `completo` | 50 millones | 512 | Red y episodios más grandes |
 
-Incluso `debug` recorre 5 millones de pasos: sirve para probar el entrenamiento,
-pero no debemos confundirlo con el smoke test corto de `test-mjx`.
+Incluso `depuracion` recorre 5 millones de pasos: sirve para probar el
+entrenamiento, pero no debemos confundirlo con la prueba breve de `test-mjx`.
 
 Fases de recompensa:
 
@@ -253,38 +268,38 @@ Fases de recompensa:
 Indicamos siempre la fase en el comando para que no se elija la fase `0` por
 descuido.
 
-## Primer entrenamiento
+## Inicio del primer entrenamiento
 
 Para una primera prueba:
 
 ```powershell
-.\tarantulin.ps1 train -- --background --run-name primera-prueba --perfil-ppo debug --fase-recompensa 1 --reset-checkpoint
+.\tarantulin.ps1 entrenar -- --segundo-plano --nombre-ejecucion primera-prueba --perfil-ppo depuracion --fase-recompensa 1 --desde-cero
 ```
 
 Para repetir el caso principal de fase 2:
 
 ```powershell
-.\tarantulin.ps1 train -- --background --run-name mi-prueba-fase-2 --perfil-ppo lite --fase-recompensa 2 --seed 42 --reset-checkpoint
+.\tarantulin.ps1 entrenar -- --segundo-plano --nombre-ejecucion mi-prueba-fase-2 --perfil-ppo ligero --fase-recompensa 2 --seed 42 --desde-cero
 ```
 
-`--background` deja el entrenamiento funcionando en segundo plano. Solo puede
+`--segundo-plano` deja el entrenamiento funcionando en segundo plano. Solo puede
 haber uno activo. Antes de empezar, el lanzador ejecuta automáticamente una
 prueba MJX de 150 pasos.
 
-El perfil `lite` no es una prueba pequeña: está preparado para 100 millones de
+El perfil `ligero` no es una prueba pequeña: está preparado para 100 millones de
 pasos. Conviene usar un nombre distinto para cada ejecución desde cero. Si
-reutilizamos un nombre junto con `--reset-checkpoint`, se eliminan sus
-checkpoints y se renuevan el log, el estado y los archivos de configuración de
-esa run. No usamos esa opción cuando queremos continuarla.
+reutilizamos un nombre junto con `--desde-cero`, se eliminan sus
+checkpoints y se renuevan el registro, el estado y los archivos de configuración de
+esa ejecución. No usamos esa opción cuando queremos continuarla.
 
-## Ver el progreso, ver el robot y detenerlo
+## Seguimiento, visualización y parada
 
 Estas tres cosas son distintas.
 
 ### Monitor de texto
 
 ```powershell
-.\tarantulin.ps1 monitor
+.\tarantulin.ps1 monitorizar
 ```
 
 Lo abrimos en una segunda ventana de PowerShell y la dejamos visible. Enseña
@@ -297,7 +312,7 @@ monitor y no detiene el entrenamiento.
 Para ver TARANTULIN funcionando sin depender de ningún entrenamiento local:
 
 ```powershell
-.\tarantulin.ps1 view-pretrained
+.\tarantulin.ps1 visualizar-red-preentrenada
 ```
 
 Este comando carga siempre la red de referencia incluida en el repositorio:
@@ -307,7 +322,7 @@ Este comando carga siempre la red de referencia incluida en el repositorio:
 - checkpoint exacto del paso `45.932.544`;
 - episodio de `1500` pasos.
 
-La selección está fijada por el propio comando. `view-pretrained` **nunca lee
+La selección está fijada por el propio comando. `visualizar-red-preentrenada` **nunca lee
 `logs_tarantulin_mjx/ultima_run.txt`** ni cambia porque hayamos empezado otro
 entrenamiento. Antes de abrir el visor también comprueba la integridad del
 paquete mediante `SHA256SUMS`. Es la opción adecuada para enseñar el movimiento
@@ -317,12 +332,13 @@ Si queremos hacer toda la comprobación, incluida una simulación corta con JAX 
 MJX, pero sin abrir todavía la ventana:
 
 ```powershell
-.\tarantulin.ps1 view-pretrained -- --dry-run
+.\tarantulin.ps1 visualizar-red-preentrenada -- --solo-comprobar
 ```
 
 La red está avanzada, pero no representa un entrenamiento finalizado: el paso
 45.932.544 corresponde al 45,93 % del objetivo de 100 millones de pasos del
-perfil `lite`. Su evaluación guardada obtuvo una recompensa de `158.104767`.
+perfil histórico `lite`, equivalente al perfil actual `ligero`. Su evaluación
+guardada obtuvo una recompensa de `158.104767`.
 
 ### Último checkpoint local
 
@@ -330,10 +346,10 @@ Cuando hemos entrenado en este equipo y queremos inspeccionar el resultado más
 reciente de esa ejecución:
 
 ```powershell
-.\tarantulin.ps1 view-results -- --episode-length 1500
+.\tarantulin.ps1 visualizar-resultados -- --longitud-episodio 1500
 ```
 
-`view-results` y el script histórico `visualizar_ultimo_checkpoint.sh` buscan el
+`visualizar-resultados` y `visualizar_ultimo_checkpoint.sh` buscan el
 último checkpoint **local**, siguiendo `logs_tarantulin_mjx/ultima_run.txt`. Ese
 checkpoint puede pertenecer a una prueba corta, a una ejecución interrumpida o
 a un entrenamiento todavía parcial; por eso su movimiento puede ser mucho peor
@@ -345,7 +361,7 @@ independiente. No es una cámara conectada a uno de los 512 entornos internos de
 entrenamiento. Dentro del visor, `R` reinicia el episodio y cerrar la ventana
 termina solo la visualización.
 
-El menú histórico conserva todos los modos y deja la red recomendada como
+El menú de visualización reúne todos los modos y deja la red recomendada como
 primera opción:
 
 ```powershell
@@ -361,49 +377,49 @@ El visor necesita memoria adicional. No abras varios visores y, en un equipo con
 poca RAM, detén primero el entrenamiento:
 
 ```powershell
-.\tarantulin.ps1 stop
-.\tarantulin.ps1 view-results -- --episode-length 1500
+.\tarantulin.ps1 parar
+.\tarantulin.ps1 visualizar-resultados -- --longitud-episodio 1500
 ```
 
 También podemos probar poses concretas:
 
 ```powershell
-.\tarantulin.ps1 mini-sim -- --reset-preset suelo2 --episode-length 1500
-.\tarantulin.ps1 mini-sim -- --reset-preset ideal --episode-length 1500
-.\tarantulin.ps1 mini-sim -- --reset-preset caida_lateral --episode-length 1500
-.\tarantulin.ps1 mini-sim -- --reset-preset boca_abajo --episode-length 1500
+.\tarantulin.ps1 minisimular -- --postura-inicial suelo2 --longitud-episodio 1500
+.\tarantulin.ps1 minisimular -- --postura-inicial ideal --longitud-episodio 1500
+.\tarantulin.ps1 minisimular -- --postura-inicial caida_lateral --longitud-episodio 1500
+.\tarantulin.ps1 minisimular -- --postura-inicial boca_abajo --longitud-episodio 1500
 ```
 
 ### Detener el entrenamiento
 
 ```powershell
-.\tarantulin.ps1 stop
+.\tarantulin.ps1 parar
 ```
 
 La parada comprueba que el proceso pertenece realmente a la ejecución actual.
-Los logs y checkpoints ya creados se conservan.
+Los registros y checkpoints ya creados se conservan.
 
 ## Continuar una ejecución
 
 Si queremos continuar `mi-prueba-fase-2`, mantenemos el nombre, el perfil, la
-fase y la semilla originales, y no usamos `--reset-checkpoint`:
+fase y la semilla originales, y no usamos `--desde-cero`:
 
 ```powershell
-.\tarantulin.ps1 train -- --background --run-name mi-prueba-fase-2 --perfil-ppo lite --fase-recompensa 2 --seed 42 --append-csv
+.\tarantulin.ps1 entrenar -- --segundo-plano --nombre-ejecucion mi-prueba-fase-2 --perfil-ppo ligero --fase-recompensa 2 --seed 42 --anexar-csv
 ```
 
 También podemos crear una ejecución nueva tomando el último checkpoint detectado:
 
 ```powershell
-.\tarantulin.ps1 train -- --background --resume-latest --perfil-ppo lite --fase-recompensa 2 --seed 42
+.\tarantulin.ps1 entrenar -- --segundo-plano --continuar-ultimo --perfil-ppo ligero --fase-recompensa 2 --seed 42
 ```
 
-`--resume-latest` no adivina el perfil ni la fase originales: debemos indicarlos.
-No combines una restauración con `--reset-checkpoint`.
+`--continuar-ultimo` no adivina el perfil ni la fase originales: debemos indicarlos.
+No combines una restauración con `--desde-cero`.
 
-## Dónde quedan los resultados
+## Resultados y exportación
 
-Mientras se entrena, logs y checkpoints permanecen dentro de WSL porque allí el
+Mientras se entrena, los registros y checkpoints permanecen dentro de WSL porque allí el
 acceso es más rápido. Para copiar la última ejecución a
 `artifacts\logs_tarantulin_mjx` en Windows:
 
@@ -428,7 +444,7 @@ de ejecución:
 
 ```powershell
 .\tarantulin.ps1 shell
-./scripts/graficar_recompensas.sh --show
+./scripts/graficar_recompensas.sh --mostrar
 ```
 
 Para observar las recompensas mientras se entrena:
@@ -446,7 +462,7 @@ shell.
 El supervisor de fases que ya teníamos también sigue disponible:
 
 ```powershell
-.\tarantulin.ps1 curriculum-auto -- --perfil-ppo lite --total-steps 200000000
+.\tarantulin.ps1 curriculo-automatico -- --perfil-ppo ligero --pasos-totales 200000000
 ```
 
 Este supervisor permanece asociado a la terminal; hay que dejarla abierta
@@ -460,36 +476,36 @@ lo usamos como prueba rápida de instalación. Para eso está `test-mjx`.
 Un ejemplo reducido sería:
 
 ```powershell
-.\tarantulin.ps1 benchmark -- --run-name benchmark-corto --warmup-steps 16 --measure-steps 64 --envs "128 256 512" --precisions "high" --allocators "preallocate" --solver-pairs "12:4"
+.\tarantulin.ps1 benchmark -- --nombre-ejecucion benchmark-corto --warmup-steps 16 --measure-steps 64 --envs "128 256 512" --precisions "high" --allocators "preallocate" --solver-pairs "12:4"
 ```
 
-## El trabajo normal del día a día
+## Trabajo diario
 
 Después de instalar, el recorrido habitual es:
 
 ```powershell
 .\tarantulin.ps1 doctor
-.\tarantulin.ps1 train -- --background --perfil-ppo lite --fase-recompensa 2
-.\tarantulin.ps1 monitor
+.\tarantulin.ps1 entrenar -- --segundo-plano --perfil-ppo ligero --fase-recompensa 2
+.\tarantulin.ps1 monitorizar
 ```
 
 Cuando queramos detenerlo antes de que termine:
 
 ```powershell
-.\tarantulin.ps1 stop
+.\tarantulin.ps1 parar
 .\tarantulin.ps1 pull-results
 ```
 
 Los comandos de cálculo sincronizan automáticamente el código Windows antes de
-ejecutarlo. `monitor`, `stop` y `pull-results` no sincronizan, para poder observar
-o detener una ejecución sin cambiar nada mientras está funcionando.
+ejecutarlo. `monitorizar`, `parar` y `pull-results` no sincronizan, para poder
+observar o detener una ejecución sin cambiar nada mientras está funcionando.
 
 ## Actualizar o reparar la instalación
 
 Primero detenemos cualquier entrenamiento. Después:
 
 ```powershell
-.\tarantulin.ps1 stop
+.\tarantulin.ps1 parar
 git status --short
 git pull --ff-only
 .\install.ps1 -Accelerator nvidia -SkipSystemPackages
@@ -517,10 +533,10 @@ Si movemos o renombramos la carpeta Windows, su identificador cambia. Ejecutamos
 otra vez `install.ps1`; se creará un runtime nuevo y el anterior se conservará
 para no perder datos.
 
-## Si algún día queremos retirar esta instalación
+## Retirada manual de la instalación
 
 Actualmente no existe un comando de desinstalación automática. Primero usamos
-`pull-results`, después `stop` y finalmente `path` para identificar exactamente
+`pull-results`, después `parar` y finalmente `path` para identificar exactamente
 el runtime asociado a esta carpeta. Cerramos terminales y visores, ejecutamos
 `wsl --shutdown` y solo entonces eliminamos manualmente ese runtime concreto si
 estamos seguros de no necesitarlo.
@@ -566,7 +582,7 @@ wsl --shutdown
 
 ### WSL sigue apareciendo después de parar
 
-`stop` detiene el entrenamiento, pero WSL puede seguir abierto por un monitor,
+`parar` detiene el entrenamiento, pero WSL puede seguir abierto por un monitor,
 un visor, una terminal o una herramienta que trabaje sobre una ruta
 `\\wsl.localhost`. Cierra esas ventanas y ejecuta:
 
@@ -579,7 +595,7 @@ TARANTULIN.
 
 ### Dice que ya hay un entrenamiento activo
 
-Usamos `monitor` para observarlo o `stop` para detenerlo. No borramos archivos
+Usamos `monitorizar` para observarlo o `parar` para detenerlo. No borramos archivos
 PID a mano: el sistema comprueba la identidad del proceso antes de actuar.
 
 ### Falta el entorno Python
@@ -592,15 +608,17 @@ Python ni las librerías.
 Cerramos visores adicionales y comenzamos con menos entornos, por ejemplo:
 
 ```powershell
-.\tarantulin.ps1 train -- --background --run-name prueba-128 --perfil-ppo debug --fase-recompensa 1 --num-envs 128 --reset-checkpoint
+.\tarantulin.ps1 entrenar -- --segundo-plano --nombre-ejecucion prueba-128 --perfil-ppo depuracion --fase-recompensa 1 --num-envs 128 --desde-cero
 ```
 
-## Qué se conserva del proyecto anterior
+## Contenido conservado del proyecto
 
 Se mantienen el entorno TARANTULIN, los XML, las recompensas, el currículo, los
-hiperparámetros, PPO y los nombres de los scripts históricos. La parte nueva se
-encarga de la instalación, las rutas, la selección del dispositivo y la
-seguridad de los procesos.
+hiperparámetros y PPO. Los nombres propios de esta capa se han cambiado de
+verdad al español; no existen copias inglesas que actúen como puentes. La parte
+de integración se encarga de la instalación, las rutas, la selección del
+dispositivo y la seguridad de los procesos, respetando los contratos originales
+de MuJoCo, MJX, JAX, Brax y Orbax.
 
 No guardamos `.venv`, dependencias descargadas, logs ni los checkpoints
 generados por cada entrenamiento en GitHub. El entorno se reconstruye desde el
@@ -611,24 +629,24 @@ todos podamos reproducir la misma demostración, está fijado al paso 45.932.544
 lleva sus sumas SHA-256. MuJoCo Playground se instala siempre desde el commit fijo
 `9c2dce4a3519cd4bb9d299bf28a6ef3f5086844b`.
 
-## Comandos que conviene recordar
+## Resumen de comandos
 
 ```powershell
 .\tarantulin.ps1 doctor
 .\tarantulin.ps1 test-mjx -- --steps 10
-.\tarantulin.ps1 view-pretrained
-.\tarantulin.ps1 train -- --background --perfil-ppo lite --fase-recompensa 2
-.\tarantulin.ps1 monitor
-.\tarantulin.ps1 view-results -- --episode-length 1500
-.\tarantulin.ps1 stop
+.\tarantulin.ps1 visualizar-red-preentrenada
+.\tarantulin.ps1 entrenar -- --segundo-plano --perfil-ppo ligero --fase-recompensa 2
+.\tarantulin.ps1 monitorizar
+.\tarantulin.ps1 visualizar-resultados -- --longitud-episodio 1500
+.\tarantulin.ps1 parar
 .\tarantulin.ps1 pull-results
 .\tarantulin.ps1 path
 .\tarantulin.ps1 help
 ```
 
-Recordatorio importante: `view-pretrained` abre siempre la red publicada de
-fase 2 y paso 45.932.544. `view-results` abre el último checkpoint creado en
-este equipo y ese resultado puede estar incompleto.
+Recordatorio importante: `visualizar-red-preentrenada` abre siempre la red
+publicada de fase 2 y paso 45.932.544. `visualizar-resultados` abre el último
+checkpoint creado en este equipo y ese resultado puede estar incompleto.
 
 ## Nota final
 

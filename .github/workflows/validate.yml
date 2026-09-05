@@ -1,4 +1,4 @@
-name: validate
+name: Validación
 
 on:
   push:
@@ -15,30 +15,46 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.11.8"
-      - name: Reproducible dependency lock
+      - name: Comprobar dependencias fijadas
         run: uv lock --check
-      - name: Bash syntax
+      - name: Comprobar sintaxis Bash
         run: find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
-      - name: Python syntax
+      - name: Comprobar sintaxis Python
         run: python -m compileall -q tarantulin scripts
-      - name: Repository hygiene
+      - name: Comprobar la estructura del repositorio
         run: |
           test "$(tr -d '\r\n' < .tarantulin/source.marker)" = tarantulin-windows-source-v1
           test ! -d external
           test ! -d logs_tarantulin_mjx
           test ! -d .venv
-      - name: Pretrained model contract
+          test -f scripts/tarantulin.sh
+          test -f scripts/curriculo_automatico_tarantulin.sh
+          test -f tarantulin/entorno_tarantulin_mjx.py
+          test -f tarantulin/curriculo_recompensas.py
+          for obsolete in \
+            scripts/tarantulin_wsl.sh \
+            scripts/curriculum_auto_tarantulin.sh \
+            scripts/install_windows.ps1 \
+            scripts/script_instalador_wsl_jax_mujoco_playground.ps1 \
+            tarantulin/tarantulin_mjx_env.py \
+            tarantulin/reward_curriculum.py; do
+            test ! -e "$obsolete"
+          done
+      - name: Comprobar la red preentrenada
         run: bash tests/test_pretrained_model.sh
-      - name: Run path safety
+      - name: Comprobar rutas y procesos
         run: |
           bash tests/test_run_path_safety.sh "$PWD"
           bash tests/test_process_identity.sh "$PWD"
+          python tests/test_rutas_visualizacion.py
+      - name: Comprobar la sincronización con WSL
+        run: bash tests/test_sync_runtime.sh "$PWD" 0123456789abcdef
 
   powershell:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse PowerShell scripts
+      - name: Comprobar sintaxis PowerShell
         shell: pwsh
         run: |
           $errors = @()

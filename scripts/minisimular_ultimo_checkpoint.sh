@@ -7,7 +7,7 @@ XML_IDEAL="${REPO_ROOT}/tarantulin/xmls/TARANTULIN_POSE_IDEAL.xml"
 
 cd "${REPO_ROOT}"
 
-select_from_list() {
+seleccionar_de_lista() {
   local prompt="$1"
   local count="$2"
   local selected
@@ -26,38 +26,38 @@ fi
 
 echo ""
 echo "Pose inicial de la minisimulacion:"
-echo "  1) Actual del checkpoint: random a cierta altura"
+echo "  1) Actual del checkpoint: aleatoria a cierta altura"
 echo "  2) Tumbada en suelo, tipo POSE_SUELO2"
 echo "  3) Pose ideal de TARANTULIN_POSE_IDEAL.xml"
-echo "  4) Caida de lado, muy inclinado y random"
-echo "  5) Boca abajo en pose random"
+echo "  4) Caida de lado, muy inclinada y aleatoria"
+echo "  5) Boca abajo en postura aleatoria"
 echo ""
 
-pose_choice="$(select_from_list "Elige pose inicial [1-5]: " 5)"
-case "${pose_choice}" in
-  1) reset_preset="actual" ;;
-  2) reset_preset="suelo2" ;;
-  3) reset_preset="ideal" ;;
-  4) reset_preset="caida_lateral" ;;
-  5) reset_preset="boca_abajo" ;;
+eleccion_postura="$(seleccionar_de_lista "Elige postura inicial [1-5]: " 5)"
+case "${eleccion_postura}" in
+  1) postura_inicial="actual" ;;
+  2) postura_inicial="suelo2" ;;
+  3) postura_inicial="ideal" ;;
+  4) postura_inicial="caida_lateral" ;;
+  5) postura_inicial="boca_abajo" ;;
 esac
 
-extra_args=()
+argumentos_adicionales=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --xml-path)
+    --ruta-xml)
       shift 2
       ;;
     *)
-      extra_args+=("$1")
+      argumentos_adicionales+=("$1")
       shift
       ;;
   esac
 done
 
 echo "Minisimulando ultimo checkpoint con XML fijo: ${XML_IDEAL}"
-echo "Pose inicial: ${reset_preset}"
-exec ./scripts/tarantulin_wsl.sh mini-sim \
-  --xml-path "${XML_IDEAL}" \
-  --reset-preset "${reset_preset}" \
-  "${extra_args[@]}"
+echo "Postura inicial: ${postura_inicial}"
+exec ./scripts/tarantulin.sh minisimular \
+  --ruta-xml "${XML_IDEAL}" \
+  --postura-inicial "${postura_inicial}" \
+  "${argumentos_adicionales[@]}"

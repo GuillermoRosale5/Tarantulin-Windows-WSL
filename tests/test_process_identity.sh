@@ -22,8 +22,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# shellcheck source=../scripts/tarantulin_wsl.sh
-source "${SOURCE_ROOT}/scripts/tarantulin_wsl.sh"
+# shellcheck source=../scripts/tarantulin.sh
+source "${SOURCE_ROOT}/scripts/tarantulin.sh"
 
 REPO_ROOT="${TEST_ROOT}/workspace"
 PROJECT_DIR="${REPO_ROOT}"
@@ -41,7 +41,7 @@ decoy_start="$(tarantulin_process_starttime "${decoy_pid}")"
 spawned_identities+=("${decoy_pid}:${decoy_start}")
 printf '%s\n' "${decoy_pid}" > "${RUN_DIR}/entrenamiento.pid"
 printf '%s\n' "${decoy_start}" > "${RUN_DIR}/entrenamiento.starttime"
-stop_training > "${TEST_ROOT}/stale-stop.log" 2>&1
+parar_entrenamiento > "${TEST_ROOT}/stale-stop.log" 2>&1
 kill -0 "${decoy_pid}"
 grep -q 'No hay entrenamiento activo con identidad validada' "${TEST_ROOT}/stale-stop.log"
 
@@ -57,7 +57,7 @@ printf '%s\n' "${reused_pid}" > "${RUN_DIR}/entrenamiento.pid"
 reused_start="$(tarantulin_process_starttime "${reused_pid}")"
 spawned_identities+=("${reused_pid}:${reused_start}")
 printf '%s\n' "$((reused_start + 1))" > "${RUN_DIR}/entrenamiento.starttime"
-stop_training > "${TEST_ROOT}/reused-stop.log" 2>&1
+parar_entrenamiento > "${TEST_ROOT}/reused-stop.log" 2>&1
 kill -0 "${reused_pid}"
 
 # Un trainer con script, cwd, logdir, run_name y starttime exactos si se detiene.
@@ -71,12 +71,12 @@ printf '%s\n' "${trainer_pid}" > "${RUN_DIR}/entrenamiento.pid"
 trainer_start="$(tarantulin_process_starttime "${trainer_pid}")"
 spawned_identities+=("${trainer_pid}:${trainer_start}")
 printf '%s\n' "${trainer_start}" > "${RUN_DIR}/entrenamiento.starttime"
-# El puntero visible puede estar obsoleto: stop debe localizar el par validado
-# de la otra run sin mezclar ruta y PID.
+# El puntero visible puede estar obsoleto: parar debe localizar el par validado
+# de la otra ejecucion sin mezclar ruta y PID.
 STALE_RUN="${LOGS_DIR}/run-puntero-stale"
 mkdir -p "${STALE_RUN}"
 printf '%s\n' "${STALE_RUN}" > "${LAST_RUN}"
-stop_training > "${TEST_ROOT}/valid-stop.log" 2>&1
+parar_entrenamiento > "${TEST_ROOT}/valid-stop.log" 2>&1
 wait "${trainer_pid}" >/dev/null 2>&1 || true
 if kill -0 "${trainer_pid}" >/dev/null 2>&1; then
   echo "ERROR: el trainer validado sigue activo" >&2
@@ -100,8 +100,8 @@ guard_decoy_start="$(tarantulin_process_starttime "${guard_decoy_pid}")"
 spawned_identities+=("${guard_decoy_pid}:${guard_decoy_start}")
 printf '%s\n' "${guard_decoy_pid}" > "${RUN_DIR}/proteccion_termica.pid"
 printf '%s\n' "${guard_decoy_start}" > "${RUN_DIR}/proteccion_termica.starttime"
-stop_training > "${TEST_ROOT}/guard-stop.log" 2>&1
+parar_entrenamiento > "${TEST_ROOT}/guard-stop.log" 2>&1
 kill -0 "${guard_decoy_pid}"
-grep -q 'no corresponde al guard' "${TEST_ROOT}/guard-stop.log"
+grep -q 'no corresponde a la proteccion' "${TEST_ROOT}/guard-stop.log"
 
 echo "PROCESS_IDENTITY_TESTS_OK"

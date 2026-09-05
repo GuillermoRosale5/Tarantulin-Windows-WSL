@@ -48,7 +48,7 @@ DEFAULT_COLUMNS = [
     "limite_articular_penalty_ponderado",
 ]
 
-DEFAULT_COLUMNS_ARG = "default"
+ARG_COLUMNAS_PREDETERMINADAS = "predeterminadas"
 
 BASE_COLUMN_ALIASES = {
     "eval_episode_reward": ("eval_episode_reward",),
@@ -234,20 +234,27 @@ DUPLICATE_WHEN_CANONICAL_EXISTS = {
     "penalty_joint_limit": "limite_articular_penalty_ponderado",
 }
 
-def _last_run_from_pointer(logs_dir: Path) -> Path | None:
+def _ultima_ejecucion_desde_puntero(logs_dir: Path) -> Path | None:
   pointer_path = logs_dir / "ultima_run.txt"
-  if not pointer_path.exists():
+  if not pointer_path.exists() or pointer_path.is_symlink():
     return None
   try:
     run_dir = Path(pointer_path.read_text(encoding="utf-8").strip())
+    resolved_logs = logs_dir.resolve(strict=True)
+    resolved_run = run_dir.resolve(strict=True)
   except OSError:
     return None
-  if run_dir.is_dir():
-    return run_dir
+  if (
+      run_dir.is_dir()
+      and not run_dir.is_symlink()
+      and resolved_run.parent == resolved_logs
+      and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", resolved_run.name)
+  ):
+    return resolved_run
   return None
 
 
-def _run_sort_key(run_dir: Path) -> float:
+def _clave_orden_ejecucion(run_dir: Path) -> float:
   candidates = [run_dir.stat().st_mtime]
   for name in ("recompensas.csv", "progreso.csv"):
     path = run_dir / name
@@ -256,21 +263,27 @@ def _run_sort_key(run_dir: Path) -> float:
   return max(candidates)
 
 
-def _latest_run(logs_dir: Path) -> Path:
-  pointed_run = _last_run_from_pointer(logs_dir)
+def _ultima_ejecucion(logs_dir: Path) -> Path:
+  pointed_run = _ultima_ejecucion_desde_puntero(logs_dir)
   if pointed_run is not None:
     return pointed_run
-  runs = [path for path in logs_dir.iterdir() if path.is_dir()]
+  runs = [
+      path
+      for path in logs_dir.iterdir()
+      if path.is_dir()
+      and not path.is_symlink()
+      and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", path.name)
+  ]
   if not runs:
-    raise FileNotFoundError(f"No hay runs en {logs_dir}")
-  return max(runs, key=_run_sort_key)
+    raise FileNotFoundError(f"No hay ejecuciones en {logs_dir}")
+  return max(runs, key=_clave_orden_ejecucion)
 
 
-def _csvs_recompensa_de_run(run_dir: Path) -> list[Path]:
+def _csvs_recompensa_de_ejecucion(run_dir: Path) -> list[Path]:
   csv_paths = [
       path
       for path in run_dir.glob("recompensas*.csv")
-      if path.is_file() and path.stat().st_size > 0
+      if path.is_file() and not path.is_symlink() and path.stat().st_size > 0
   ]
   if not csv_paths:
     return []
@@ -282,12 +295,12 @@ def _csvs_recompensa_de_run(run_dir: Path) -> list[Path]:
   return sorted(csv_paths, key=csv_sort_key)
 
 
-def _read_csv(path: Path) -> list[dict[str, str]]:
+def _leer_csv(path: Path) -> list[dict[str, str]]:
   with path.open(newline="", encoding="utf-8") as f:
     return list(csv.DictReader(f))
 
 
-def _to_float(value: str) -> float | None:
+def _a_numero(value: str) -> float | None:
   if value is None or value == "":
     return None
   try:
@@ -296,11 +309,11 @@ def _to_float(value: str) -> float | None:
     return None
 
 
-def _legacy_metric_column(metric_name: str) -> str:
+def _columna_metrica_historica(metric_name: str) -> str:
   return metric_name.replace("/", "_")
 
 
-def _real_metric_name(column: str) -> str:
+def _nombre_metrica_real(column: str) -> str:
   for real_name, aliases in BASE_COLUMN_ALIASES.items():
     if column == real_name or column in aliases:
       return real_name
@@ -313,7 +326,7 @@ def _real_metric_name(column: str) -> str:
   return column
 
 
-def _display_metric_name(column: str) -> str:
+def _nombre_metrica_mostrado(column: str) -> str:
   for prefix in ("reward", "penalty", "done", "state", "final", "debug"):
     marker = f"{prefix}_"
     if column.startswith(marker):
@@ -321,28 +334,28 @@ def _display_metric_name(column: str) -> str:
   return column
 
 
-def _column_candidates(column: str) -> tuple[str, ...]:
+def _columnas_candidatas(column: str) -> tuple[str, ...]:
   candidates = [column]
   candidates.extend(COLUMN_ALIASES.get(column, ()))
   aliases = BASE_COLUMN_ALIASES.get(column)
   if aliases:
     candidates.extend(aliases)
-  real_name = _real_metric_name(column)
+  real_name = _nombre_metrica_real(column)
   if real_name != column:
     candidates.append(real_name)
   if "/" in real_name:
-    candidates.append(_legacy_metric_column(real_name))
+    candidates.append(_columna_metrica_historica(real_name))
   return tuple(dict.fromkeys(candidates))
 
 
-def _matched_column_name(row: dict[str, str], column: str) -> str | None:
-  for candidate in _column_candidates(column):
+def _nombre_columna_encontrada(row: dict[str, str], column: str) -> str | None:
+  for candidate in _columnas_candidatas(column):
     if candidate in row:
       return candidate
   return None
 
 
-def _legend_label(row: dict[str, str], column: str) -> str:
+def _etiqueta_leyenda(row: dict[str, str], column: str) -> str:
   del row
   if column == "reward_total":
     return "reward_total = positive_reward - penalties"
@@ -357,24 +370,24 @@ def _legend_label(row: dict[str, str], column: str) -> str:
   return column
 
 
-def _value_for_column(row: dict[str, str], column: str) -> str:
-  for candidate in _column_candidates(column):
+def _valor_columna(row: dict[str, str], column: str) -> str:
+  for candidate in _columnas_candidatas(column):
     if candidate in row:
       return row.get(candidate, "")
   return ""
 
 
-def _series(
+def _serie(
     rows: list[dict[str, str]],
     column: str,
-    unidades_recompensa: str = "raw",
+    unidades_recompensa: str = "brutas",
 ) -> list[float | None]:
   if column == "reward_total":
-    direct_values = [_to_float(_value_for_column(row, column)) for row in rows]
-    if _has_data(direct_values):
+    direct_values = [_a_numero(_valor_columna(row, column)) for row in rows]
+    if _tiene_datos(direct_values):
       return _quizas_escalar_serie_recompensa(rows, column, direct_values, unidades_recompensa)
-    valores_recompensa = _first_available_series(rows, ("positive_reward", "positive_reward"))
-    valores_penalizacion = _first_available_series(rows, ("penalties", "penalties"))
+    valores_recompensa = _primera_serie_disponible(rows, ("positive_reward", "positive_reward"))
+    valores_penalizacion = _primera_serie_disponible(rows, ("penalties", "penalties"))
     values = [
         None
         if valor_recompensa is None or valor_penalizacion is None
@@ -382,31 +395,31 @@ def _series(
         for valor_recompensa, valor_penalizacion in zip(valores_recompensa, valores_penalizacion)
     ]
     return _quizas_escalar_serie_recompensa(rows, column, values, unidades_recompensa)
-  values = [_to_float(_value_for_column(row, column)) for row in rows]
-  if _should_negate_column(column):
+  values = [_a_numero(_valor_columna(row, column)) for row in rows]
+  if _debe_negar_columna(column):
     values = [None if value is None else -value for value in values]
   return _quizas_escalar_serie_recompensa(rows, column, values, unidades_recompensa)
 
 
-def _has_data(values: list[float | None]) -> bool:
+def _tiene_datos(values: list[float | None]) -> bool:
   return any(value is not None for value in values)
 
 
-def _has_nonzero_data(values: list[float | None]) -> bool:
+def _tiene_datos_no_nulos(values: list[float | None]) -> bool:
   return any(value is not None and abs(value) > 1e-12 for value in values)
 
 
-def _first_available_series(
+def _primera_serie_disponible(
     rows: list[dict[str, str]], columns: tuple[str, ...]
 ) -> list[float | None]:
   for column in columns:
-    values = [_to_float(_value_for_column(row, column)) for row in rows]
-    if _has_data(values):
+    values = [_a_numero(_valor_columna(row, column)) for row in rows]
+    if _tiene_datos(values):
       return values
   return [None for _ in rows]
 
 
-def _median(values: list[float]) -> float:
+def _mediana(values: list[float]) -> float:
   ordered = sorted(values)
   middle = len(ordered) // 2
   if len(ordered) % 2:
@@ -414,19 +427,19 @@ def _median(values: list[float]) -> float:
   return 0.5 * (ordered[middle - 1] + ordered[middle])
 
 
-def _reward_scale_factor(rows: list[dict[str, str]]) -> float:
+def _factor_escala_recompensa(rows: list[dict[str, str]]) -> float:
   explicit_values = []
   for row in rows:
-    value = _to_float(row.get("debug_reward_scale", ""))
+    value = _a_numero(row.get("debug_reward_scale", ""))
     if value is not None and value > 0.0:
       explicit_values.append(value)
   if explicit_values:
-    return _median(explicit_values)
+    return _mediana(explicit_values)
 
   ratios = []
   for row in rows:
-    reward_scaled = _to_float(_value_for_column(row, "eval_episode_reward"))
-    reward_raw = _to_float(_value_for_column(row, "reward_total"))
+    reward_scaled = _a_numero(_valor_columna(row, "eval_episode_reward"))
+    reward_raw = _a_numero(_valor_columna(row, "reward_total"))
     if (
         reward_scaled is not None
         and reward_raw is not None
@@ -436,7 +449,7 @@ def _reward_scale_factor(rows: list[dict[str, str]]) -> float:
       if 0.0 < abs(ratio) <= 1.0:
         ratios.append(abs(ratio))
   if ratios:
-    return _median(ratios)
+    return _mediana(ratios)
   return 1.0
 
 
@@ -446,9 +459,9 @@ def _quizas_escalar_serie_recompensa(
     values: list[float | None],
     unidades_recompensa: str,
 ) -> list[float | None]:
-  if unidades_recompensa != "scaled" or not _is_default_plot_column(column):
+  if unidades_recompensa != "escaladas" or not _es_columna_grafica_predeterminada(column):
     return values
-  scale = _reward_scale_factor(rows)
+  scale = _factor_escala_recompensa(rows)
   return [None if value is None else value * scale for value in values]
 
 
@@ -468,19 +481,19 @@ def _es_columna_penalizacion(column: str) -> bool:
   return column.endswith("_penalty_ponderado")
 
 
-def _should_negate_column(column: str) -> bool:
+def _debe_negar_columna(column: str) -> bool:
   return column in NEGATED_PLOT_COLUMNS or _es_columna_penalizacion(column)
 
 
-def _is_default_plot_column(column: str) -> bool:
+def _es_columna_grafica_predeterminada(column: str) -> bool:
   return column == "reward_total" or _es_columna_recompensa(column) or _es_columna_penalizacion(column)
 
 
-def _stable_index(text: str, modulo: int) -> int:
+def _indice_estable(text: str, modulo: int) -> int:
   return sum((index + 1) * ord(char) for index, char in enumerate(text)) % modulo
 
 
-def _plot_style(column: str) -> dict[str, object]:
+def _estilo_grafica(column: str) -> dict[str, object]:
   if column == "reward_total":
     return {
         "color": "#111111",
@@ -512,7 +525,7 @@ def _plot_style(column: str) -> dict[str, object]:
         "zorder": 4,
     }
   if _es_columna_penalizacion(column):
-    index = _stable_index(column, len(PENALTY_COLORS))
+    index = _indice_estable(column, len(PENALTY_COLORS))
     return {
         "color": PENALTY_COLORS[index],
         "linestyle": "--",
@@ -523,7 +536,7 @@ def _plot_style(column: str) -> dict[str, object]:
         "zorder": 3,
     }
   if _es_columna_recompensa(column):
-    index = _stable_index(column, len(REWARD_COLORS))
+    index = _indice_estable(column, len(REWARD_COLORS))
     return {
         "color": REWARD_COLORS[index],
         "linestyle": "-",
@@ -533,7 +546,7 @@ def _plot_style(column: str) -> dict[str, object]:
         "alpha": 0.92,
         "zorder": 3,
     }
-  index = _stable_index(column, len(STATE_COLORS))
+  index = _indice_estable(column, len(STATE_COLORS))
   return {
       "color": STATE_COLORS[index],
       "linestyle": ":",
@@ -545,74 +558,74 @@ def _plot_style(column: str) -> dict[str, object]:
   }
 
 
-def _resolve_columns(
+def _resolver_columnas(
     rows: list[dict[str, str]],
     columns_arg: str,
 ) -> list[str]:
-  if columns_arg in {"default", "recompensas", "rewards", "reward"}:
-    return _resolve_default_columns(rows)
+  if columns_arg == "predeterminadas":
+    return _resolver_columnas_predeterminadas(rows)
 
-  if columns_arg != "all":
+  if columns_arg != "todas":
     return [col.strip() for col in columns_arg.split(",") if col.strip()]
 
   return [
       col
       for col in rows[0].keys()
-      if _is_default_plot_column(col) and _has_data(_series(rows, col))
+      if _es_columna_grafica_predeterminada(col) and _tiene_datos(_serie(rows, col))
   ]
 
 
-def _resolve_default_columns(rows: list[dict[str, str]]) -> list[str]:
+def _resolver_columnas_predeterminadas(rows: list[dict[str, str]]) -> list[str]:
   if not rows:
     return []
 
   header = list(rows[0].keys())
   columns: list[str] = []
   for preferred in DEFAULT_COLUMNS:
-    matched = _matched_column_name(rows[0], preferred)
+    matched = _nombre_columna_encontrada(rows[0], preferred)
     if matched is None or preferred in columns:
       continue
-    values = _series(rows, preferred)
+    values = _serie(rows, preferred)
     if preferred in {"reward_total", "positive_reward", "penalties"}:
       columns.append(preferred)
       continue
-    if _has_nonzero_data(values):
+    if _tiene_datos_no_nulos(values):
       columns.append(preferred)
 
   for column in header:
-    if not _is_default_plot_column(column) or column in columns:
+    if not _es_columna_grafica_predeterminada(column) or column in columns:
       continue
     canonical = DUPLICATE_WHEN_CANONICAL_EXISTS.get(column)
     if canonical is not None:
-      canonical_match = _matched_column_name(rows[0], canonical)
+      canonical_match = _nombre_columna_encontrada(rows[0], canonical)
       if canonical_match is not None and canonical in columns:
         continue
-    values = _series(rows, column)
-    if _has_nonzero_data(values):
+    values = _serie(rows, column)
+    if _tiene_datos_no_nulos(values):
       columns.append(column)
 
   return columns
 
 
-def _pick_rows_for_plot(
+def _elegir_filas_grafica(
     rows: list[dict[str, str]],
     source: str,
     columns_arg: str,
 ) -> tuple[list[dict[str, str]], str]:
   filtered_rows = _filtrar_origen(rows, source)
-  columns = _resolve_columns(filtered_rows, columns_arg)
-  if any(_has_data(_series(filtered_rows, column)) for column in columns):
+  columns = _resolver_columnas(filtered_rows, columns_arg)
+  if any(_tiene_datos(_serie(filtered_rows, column)) for column in columns):
     return filtered_rows, source
 
-  if source == "all":
+  if source == "todos":
     return filtered_rows, source
 
-  fallback_source = "eval" if source == "train" else "all"
+  fallback_source = "evaluacion" if source == "entrenamiento" else "todos"
   fallback_rows = _filtrar_origen(rows, fallback_source)
-  fallback_columns = _resolve_columns(fallback_rows, columns_arg)
-  if any(_has_data(_series(fallback_rows, column)) for column in fallback_columns):
+  fallback_columns = _resolver_columnas(fallback_rows, columns_arg)
+  if any(_tiene_datos(_serie(fallback_rows, column)) for column in fallback_columns):
     print(
-        f"No hay columnas con datos para source={source!r}; uso source={fallback_source!r}.",
+        f"No hay columnas con datos para origen={source!r}; uso origen={fallback_source!r}.",
         file=sys.stderr,
     )
     return fallback_rows, fallback_source
@@ -620,11 +633,11 @@ def _pick_rows_for_plot(
   return filtered_rows, source
 
 
-def _format_wall_time(timestamp: float) -> str:
+def _formatear_tiempo_real(timestamp: float) -> str:
   return dt.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _run_start_from_name(run_dir: Path) -> float | None:
+def _inicio_ejecucion_desde_nombre(run_dir: Path) -> float | None:
   match = re.search(r"(\d{8})-(\d{6})", run_dir.name)
   if not match:
     return None
@@ -635,44 +648,48 @@ def _run_start_from_name(run_dir: Path) -> float | None:
   return parsed.timestamp()
 
 
-def _time_window_text(csv_path: Path, run_dir: Path, rows: list[dict[str, str]]) -> str:
+def _texto_intervalo_temporal(csv_path: Path, run_dir: Path, rows: list[dict[str, str]]) -> str:
   generated_ts = dt.datetime.now().timestamp()
   csv_mtime = csv_path.stat().st_mtime
   last_row = rows[-1]
-  elapsed = _to_float(last_row.get("elapsed_seconds", ""))
+  elapsed = _a_numero(last_row.get("elapsed_seconds", ""))
   start_ts = None
   if elapsed is not None:
     start_ts = csv_mtime - elapsed
   if start_ts is None:
-    start_ts = _run_start_from_name(run_dir)
+    start_ts = _inicio_ejecucion_desde_nombre(run_dir)
   if start_ts is None:
     start_ts = run_dir.stat().st_mtime
 
   active = generated_ts - csv_mtime <= 300.0
   end_label = "en curso" if active else "finalizada"
   parts = [
-      f"inicio: {_format_wall_time(start_ts)}",
+      f"inicio: {_formatear_tiempo_real(start_ts)}",
       f"estado: {end_label}",
-      f"ultimo CSV: {_format_wall_time(csv_mtime)}",
-      f"grafica: {_format_wall_time(generated_ts)}",
+      f"ultimo CSV: {_formatear_tiempo_real(csv_mtime)}",
+      f"grafica: {_formatear_tiempo_real(generated_ts)}",
   ]
   num_steps = last_row.get("num_steps", "")
   debug_version = last_row.get("debug_version", "")
   if num_steps:
-    parts.append(f"steps: {num_steps}")
+    parts.append(f"pasos: {num_steps}")
   if debug_version:
     parts.append(f"version_recompensa: {debug_version}")
   return " | ".join(parts)
 
 
 def _filtrar_origen(rows: list[dict[str, str]], source: str) -> list[dict[str, str]]:
-  if source == "all" or "source" not in rows[0]:
+  if source == "todos" or "source" not in rows[0]:
     return rows
-  filtered = [row for row in rows if row.get("source") == source]
+  valor_csv = {
+      "entrenamiento": "train",
+      "evaluacion": "eval",
+  }[source]
+  filtered = [row for row in rows if row.get("source") == valor_csv]
   if filtered:
     return filtered
   print(
-      f"No hay filas source={source!r}; uso todas las filas disponibles.",
+      f"No hay filas del origen {source!r}; uso todas las filas disponibles.",
       file=sys.stderr,
   )
   return rows
@@ -684,11 +701,11 @@ def _filtrar_ultimo_segmento(rows: list[dict[str, str]]) -> list[dict[str, str]]
   if not rows:
     return rows
   start = 0
-  prev_steps = _to_float(rows[0].get("num_steps", ""))
-  prev_elapsed = _to_float(rows[0].get("elapsed_seconds", ""))
+  prev_steps = _a_numero(rows[0].get("num_steps", ""))
+  prev_elapsed = _a_numero(rows[0].get("elapsed_seconds", ""))
   for index, row in enumerate(rows[1:], start=1):
-    steps = _to_float(row.get("num_steps", ""))
-    elapsed = _to_float(row.get("elapsed_seconds", ""))
+    steps = _a_numero(row.get("num_steps", ""))
+    elapsed = _a_numero(row.get("elapsed_seconds", ""))
     steps_reset = (
         steps is not None and prev_steps is not None and steps < prev_steps
     )
@@ -710,7 +727,7 @@ def _filtrar_ultimo_segmento(rows: list[dict[str, str]]) -> list[dict[str, str]]
   return rows[start:]
 
 
-def _smooth(values: list[float | None], window: int) -> list[float | None]:
+def _suavizar(values: list[float | None], window: int) -> list[float | None]:
   if window <= 1:
     return values
   smoothed: list[float | None] = []
@@ -724,7 +741,7 @@ def _smooth(values: list[float | None], window: int) -> list[float | None]:
   return smoothed
 
 
-def _safe_stem(path: Path) -> str:
+def _nombre_archivo_seguro(path: Path) -> str:
   chars = [
       char if char.isalnum() or char in ("-", "_") else "_"
       for char in path.stem
@@ -732,7 +749,7 @@ def _safe_stem(path: Path) -> str:
   return "".join(chars).strip("_") or "recompensas"
 
 
-def _output_path_for_csv(
+def _ruta_salida_para_csv(
     csv_path: Path,
     run_dir: Path,
     output_arg: str | None,
@@ -740,7 +757,7 @@ def _output_path_for_csv(
 ) -> Path:
   default_name = "recompensas.png"
   if multiple_outputs:
-    default_name = f"{_safe_stem(csv_path)}.png"
+    default_name = f"{_nombre_archivo_seguro(csv_path)}.png"
 
   if not output_arg:
     return run_dir / default_name
@@ -749,11 +766,11 @@ def _output_path_for_csv(
   if output.suffix.lower() == ".png" and not multiple_outputs:
     return output
   if output.suffix.lower() == ".png":
-    return output.with_name(f"{output.stem}_{_safe_stem(csv_path)}{output.suffix}")
+    return output.with_name(f"{output.stem}_{_nombre_archivo_seguro(csv_path)}{output.suffix}")
   return output / default_name
 
 
-def _plot_csv(
+def _graficar_csv(
     csv_path: Path,
     run_dir: Path,
     output_path: Path,
@@ -765,40 +782,40 @@ def _plot_csv(
     unidades_recompensa: str,
     show: bool,
 ) -> None:
-  rows = _read_csv(csv_path)
+  rows = _leer_csv(csv_path)
   if not rows:
     raise RuntimeError(f"{csv_path} esta vacio.")
-  if segment == "last":
+  if segment == "ultimo":
     rows = _filtrar_ultimo_segmento(rows)
-  rows, source = _pick_rows_for_plot(rows, source, columns_arg)
+  rows, source = _elegir_filas_grafica(rows, source, columns_arg)
 
-  x_values = _series(rows, x_axis)
-  if not _has_data(x_values):
+  x_values = _serie(rows, x_axis)
+  if not _tiene_datos(x_values):
     raise RuntimeError(f"No hay datos validos para eje X: {x_axis}")
   x_clean = [0.0 if value is None else value for value in x_values]
 
-  columns = _resolve_columns(rows, columns_arg)
+  columns = _resolver_columnas(rows, columns_arg)
 
   fig, ax = plt.subplots(figsize=(13, 7))
   plotted = 0
   sample_row = rows[0]
   for column in columns:
-    values = _smooth(_series(rows, column, unidades_recompensa=unidades_recompensa), smooth_window)
-    if not _has_data(values):
+    values = _suavizar(_serie(rows, column, unidades_recompensa=unidades_recompensa), smooth_window)
+    if not _tiene_datos(values):
       continue
     y = [float("nan") if value is None else value for value in values]
     ax.plot(
         x_clean,
         y,
-        label=_legend_label(sample_row, column),
-        **_plot_style(column),
+        label=_etiqueta_leyenda(sample_row, column),
+        **_estilo_grafica(column),
     )
     plotted += 1
 
   if plotted == 0:
     raise RuntimeError(f"No hay columnas con datos para graficar en {csv_path}.")
 
-  time_text = _time_window_text(csv_path, run_dir, rows)
+  time_text = _texto_intervalo_temporal(csv_path, run_dir, rows)
   ax.set_title(
       f"Evolucion de recompensas - {run_dir.name} / {csv_path.name} "
       f"(origen={source}, tramo={segment}, suavizado={smooth_window}, "
@@ -808,10 +825,12 @@ def _plot_csv(
   ax.set_xlabel(x_axis)
   unidades_y = (
       "recompensa PPO escalada"
-      if unidades_recompensa == "scaled"
-      else "recompensa raw"
+      if unidades_recompensa == "escaladas"
+      else "recompensa bruta"
   )
-  ax.set_ylabel(f"reward ponderada ({unidades_y}); penalties dibujadas en negativo")
+  ax.set_ylabel(
+      f"recompensa ponderada ({unidades_y}); penalizaciones dibujadas en negativo"
+  )
   ax.grid(True, alpha=0.3)
   ax.legend(loc="best", fontsize="small", ncols=3)
   fig.text(
@@ -839,88 +858,102 @@ def main() -> None:
   parser = argparse.ArgumentParser(
       description="Grafica la evolucion temporal de los componentes de recompensa."
   )
-  parser.add_argument("--logs_dir", default="logs_tarantulin_mjx")
-  parser.add_argument("--run_dir", default=None)
-  parser.add_argument("--csv_path", default=None)
+  parser.add_argument("--directorio-registros", dest="logs_dir", default="logs_tarantulin_mjx")
+  parser.add_argument("--directorio-ejecucion", dest="run_dir", default=None)
+  parser.add_argument("--ruta-csv", dest="csv_path", default=None)
   parser.add_argument(
-      "--csv_mode",
-      choices=["all", "active"],
-      default="all",
+      "--modo-csv",
+      dest="csv_mode",
+      choices=["todos", "activo"],
+      default="todos",
       help=(
-          "all genera una grafica por cada recompensas*.csv de la run; "
-          "active usa solo recompensas.csv."
+          "todos genera una grafica por cada recompensas*.csv de la ejecucion; "
+          "activo usa solo recompensas.csv."
       ),
   )
-  parser.add_argument("--output", default=None)
+  parser.add_argument("--salida", dest="output", default=None)
   parser.add_argument(
-      "--x",
+      "--eje-x",
+      dest="x",
       choices=["num_steps", "elapsed_seconds", "elapsed_hours", "percent"],
       default="num_steps",
   )
   parser.add_argument(
-      "--columns",
-      default=DEFAULT_COLUMNS_ARG,
+      "--columnas",
+      dest="columns",
+      default=ARG_COLUMNAS_PREDETERMINADAS,
       help=(
-          "Columnas separadas por coma. Usa 'default' para reward_total, "
-          "recompensas y penalties ponderadas presentes; 'all' para todos los componentes finales disponibles."
+          "Columnas separadas por coma. Usa 'predeterminadas' para reward_total, "
+          "recompensas y penalizaciones ponderadas presentes; 'todas' para "
+          "todos los componentes finales disponibles."
       ),
   )
   parser.add_argument(
-      "--source",
-      choices=["train", "eval", "all"],
-      default="all",
-      help="Origen de metricas a graficar. all usa todo lo disponible y evita quedarse esperando si la ultima fila no es eval.",
+      "--origen",
+      dest="source",
+      choices=["entrenamiento", "evaluacion", "todos"],
+      default="todos",
+      help=(
+          "Origen de las metricas. 'todos' usa todo lo disponible y evita "
+          "quedarse esperando si la ultima fila no es de evaluacion."
+      ),
   )
   parser.add_argument(
-      "--segment",
-      choices=["last", "all"],
-      default="last",
+      "--segmento",
+      dest="segment",
+      choices=["ultimo", "todos"],
+      default="ultimo",
       help="Usa solo la ultima sesion dentro del CSV o todas las filas.",
   )
   parser.add_argument(
-      "--smooth",
+      "--suavizado",
+      dest="smooth",
       type=int,
       default=5,
       help="Media movil causal en numero de puntos. Usa 1 para desactivar.",
   )
   parser.add_argument(
-      "--unidades_recompensa",
-      "--reward_units",
+      "--unidades-recompensa",
       dest="unidades_recompensa",
-      choices=["scaled", "raw"],
-      default="scaled",
+      choices=["escaladas", "brutas"],
+      default="escaladas",
       help=(
-          "scaled muestra las contribuciones ya multiplicadas por reward_scale; "
-          "raw muestra las sumas internas sin reward_scale."
+          "escaladas muestra las contribuciones ya multiplicadas por reward_scale; "
+          "brutas muestra las sumas internas sin reward_scale."
       ),
   )
-  parser.add_argument("--show", action="store_true")
+  parser.add_argument("--mostrar", dest="show", action="store_true")
   args = parser.parse_args()
 
-  run_dir = Path(args.run_dir) if args.run_dir else _latest_run(Path(args.logs_dir))
+  if args.run_dir:
+    run_dir = Path(args.run_dir)
+  elif args.csv_path:
+    run_dir = Path(args.csv_path).parent
+  else:
+    run_dir = _ultima_ejecucion(Path(args.logs_dir))
   if args.csv_path:
     csv_paths = [Path(args.csv_path)]
-  elif args.csv_mode == "active":
+  elif args.csv_mode == "activo":
     csv_paths = [run_dir / "recompensas.csv"]
   else:
-    csv_paths = _csvs_recompensa_de_run(run_dir)
+    csv_paths = _csvs_recompensa_de_ejecucion(run_dir)
 
   if not csv_paths:
     raise FileNotFoundError(
-        f"No hay recompensas*.csv en {run_dir}. Lanza una run nueva o usa --csv_path."
+        f"No hay recompensas*.csv en {run_dir}. Lanza una ejecucion nueva o usa --ruta-csv."
     )
 
   multiple_outputs = len(csv_paths) > 1
   for csv_path in csv_paths:
     if not csv_path.exists():
       raise FileNotFoundError(f"No existe {csv_path}.")
-    output_path = _output_path_for_csv(
+    output_path = _ruta_salida_para_csv(
         csv_path=csv_path,
         run_dir=run_dir,
         output_arg=args.output,
         multiple_outputs=multiple_outputs,
     )
-    _plot_csv(
+    _graficar_csv(
         csv_path=csv_path,
         run_dir=run_dir,
         output_path=output_path,

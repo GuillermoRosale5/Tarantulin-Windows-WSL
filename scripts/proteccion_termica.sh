@@ -27,13 +27,13 @@ fi
 
 RUN_DIR_REQUESTED="${RUN_DIR}"
 if [[ -L "${RUN_DIR_REQUESTED}" ]]; then
-  echo "La run no puede ser un enlace simbolico: ${RUN_DIR_REQUESTED}" >&2
+  echo "La ejecucion no puede ser un enlace simbolico: ${RUN_DIR_REQUESTED}" >&2
   exit 1
 fi
 RUN_DIR="$(realpath -e "${RUN_DIR_REQUESTED}")"
 LOGS_DIR="$(realpath -e "${LOGS_DIR}")"
 if [[ "$(dirname -- "${RUN_DIR}")" != "${LOGS_DIR}" ]]; then
-  echo "Run insegura o ajena a este runtime: ${RUN_DIR}" >&2
+  echo "Ejecucion insegura o ajena a este runtime: ${RUN_DIR}" >&2
   exit 1
 fi
 

@@ -17,7 +17,7 @@ Uso:
                          [--skip-gpu-check]
 
 Instala paquetes base de Ubuntu/WSL y, por defecto, ejecuta:
-  scripts/tarantulin_wsl.sh setup
+  scripts/tarantulin.sh setup
 
 Opciones:
   --no-setup             Solo instala paquetes del sistema y permisos.
@@ -32,7 +32,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-setup) RUN_SETUP=0; shift ;;
-    --skip-system-packages|--no-apt) INSTALL_SYSTEM_PACKAGES=0; shift ;;
+    --skip-system-packages) INSTALL_SYSTEM_PACKAGES=0; shift ;;
     --accelerator) ACCELERATOR="$2"; shift 2 ;;
     --skip-gpu-check) SKIP_GPU_CHECK=1; shift ;;
     --enable-experimental-amd-wsl) ENABLE_EXPERIMENTAL_AMD_WSL=1; shift ;;
@@ -98,7 +98,7 @@ if (( RUN_SETUP == 1 )); then
   export TARANTULIN_BACKEND_PROFILE="${ACCELERATOR}"
   if (( SKIP_GPU_CHECK == 1 )); then export TARANTULIN_SKIP_BACKEND_CHECK=1; fi
   if (( ENABLE_EXPERIMENTAL_AMD_WSL == 1 )); then export TARANTULIN_ENABLE_EXPERIMENTAL_AMD_WSL=1; fi
-  "${REPO_ROOT}/scripts/tarantulin_wsl.sh" setup
+  "${REPO_ROOT}/scripts/tarantulin.sh" setup
 else
   echo "Instalacion base OK. Setup completo omitido por --no-setup."
 fi

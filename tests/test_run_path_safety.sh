@@ -13,8 +13,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# shellcheck source=../scripts/tarantulin_wsl.sh
-source "${SOURCE_ROOT}/scripts/tarantulin_wsl.sh"
+# shellcheck source=../scripts/tarantulin.sh
+source "${SOURCE_ROOT}/scripts/tarantulin.sh"
 
 REPO_ROOT="${TEST_ROOT}/workspace"
 PROJECT_DIR="${REPO_ROOT}"
@@ -23,26 +23,26 @@ LAST_RUN="${LOGS_DIR}/ultima_run.txt"
 mkdir -p "${LOGS_DIR}" "${TEST_ROOT}/outside"
 printf 'intacto\n' > "${TEST_ROOT}/outside/sentinel.txt"
 
-if (validate_run_name "../escape") >/dev/null 2>&1; then
-  echo "ERROR: se acepto traversal en run-name" >&2
+if (validar_nombre_ejecucion "../escape") >/dev/null 2>&1; then
+  echo "ERROR: se acepto una ruta insegura en el nombre de ejecución" >&2
   exit 1
 fi
-validate_run_name "run-segura_01.2"
+validar_nombre_ejecucion "run-segura_01.2"
 
 ln -s "${TEST_ROOT}/outside" "${LOGS_DIR}/run-enlazada"
-if assert_run_path_safe "${LOGS_DIR}/run-enlazada" >/dev/null 2>&1; then
-  echo "ERROR: se acepto una run enlazada fuera de logs" >&2
+if comprobar_ruta_ejecucion_segura "${LOGS_DIR}/run-enlazada" >/dev/null 2>&1; then
+  echo "ERROR: se acepto una ejecucion enlazada fuera de logs" >&2
   exit 1
 fi
 test "$(cat "${TEST_ROOT}/outside/sentinel.txt")" = intacto
 
 printf '%s\n' "${TEST_ROOT}/outside" > "${LAST_RUN}"
-test -z "$(current_run 2>/dev/null)"
+test -z "$(ejecucion_actual 2>/dev/null)"
 
 mkdir -p "${LOGS_DIR}/run-segura"
 rm -f -- "${LAST_RUN}"
 ln -s "${TEST_ROOT}/outside/sentinel.txt" "${LAST_RUN}"
-write_last_run "${LOGS_DIR}/run-segura"
+escribir_ultima_ejecucion "${LOGS_DIR}/run-segura"
 test ! -L "${LAST_RUN}"
 test "$(cat "${TEST_ROOT}/outside/sentinel.txt")" = intacto
 test "$(cat "${LAST_RUN}")" = "${LOGS_DIR}/run-segura"

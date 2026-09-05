@@ -17,10 +17,10 @@ Uso:
 Sin opciones abre menus por numeros para perfil PPO y fase curricular.
 
 Opciones utiles:
-  --perfil-ppo debug|lite|lite_fast|full
+  --perfil-ppo depuracion|ligero|ligero_rapido|completo
   --fase-recompensa 1|2|3|auto
 
-Fase auto lanza scripts/curriculum_auto_tarantulin.sh:
+Fase auto lanza scripts/curriculo_automatico_tarantulin.sh:
   fases 1->2->3, 200M steps totales, cambio automatico por rendimiento.
 EOF
 }
@@ -31,10 +31,10 @@ for arg in "$@"; do
       usage
       exit 0
       ;;
-    --perfil-ppo|--perfil_ppo|--ppo-profile|--perfil-ppo=*|--perfil_ppo=*|--ppo-profile=*)
+    --perfil-ppo|--perfil-ppo=*)
       PERFIL_PPO_PASADO=1
       ;;
-    --fase-recompensa|--fase_recompensa|--reward-phase|--reward_phase|--fase-recompensa=*|--fase_recompensa=*|--reward-phase=*|--reward_phase=*)
+    --fase-recompensa|--fase-recompensa=*)
       FASE_RECOMPENSA_PASADA=1
       ;;
   esac
@@ -43,25 +43,25 @@ done
 prev_arg=""
 for arg in "$@"; do
   case "${prev_arg}" in
-    --perfil-ppo|--perfil_ppo|--ppo-profile)
+    --perfil-ppo)
       PERFIL_PPO="${arg}"
       prev_arg=""
       continue
       ;;
-    --fase-recompensa|--fase_recompensa|--reward-phase|--reward_phase)
+    --fase-recompensa)
       FASE_RECOMPENSA="${arg}"
       prev_arg=""
       continue
       ;;
   esac
   case "${arg}" in
-    --perfil-ppo|--perfil_ppo|--ppo-profile|--fase-recompensa|--fase_recompensa|--reward-phase|--reward_phase)
+    --perfil-ppo|--fase-recompensa)
       prev_arg="${arg}"
       ;;
-    --perfil-ppo=*|--perfil_ppo=*|--ppo-profile=*)
+    --perfil-ppo=*)
       PERFIL_PPO="${arg#*=}"
       ;;
-    --fase-recompensa=*|--fase_recompensa=*|--reward-phase=*|--reward_phase=*)
+    --fase-recompensa=*)
       FASE_RECOMPENSA="${arg#*=}"
       ;;
   esac
@@ -70,18 +70,18 @@ done
 elegir_perfil_ppo() {
   cat >&2 <<'EOF'
 Perfiles PPO:
-  1) debug      5M steps, 20 evals, ep 1000, red 256-128       | prueba rapida
-  2) lite       100M steps, 200 evals, ep 1500, red 256-256      | recomendado
-  3) lite_fast  100M steps, 200 evals, ep 1500, red 256-256, 1024 envs
+  1) depuracion      5M steps, 20 evals, ep 1000, red 256-128       | prueba rapida
+  2) ligero          100M steps, 200 evals, ep 1500, red 256-256    | recomendado
+  3) ligero_rapido   100M steps, 200 evals, ep 1500, red 256-256, 1024 envs
 
-  full existe para runs finales: usa --perfil-ppo full si lo quieres.
+  completo existe para ejecuciones finales: usa --perfil-ppo completo si lo quieres.
 EOF
   local opcion
   read -r -p "Elige perfil PPO [2]: " opcion < /dev/tty
   case "${opcion:-2}" in
-    1|debug) printf '%s\n' "debug" ;;
-    2|lite) printf '%s\n' "lite" ;;
-    3|lite_fast|lite-fast) printf '%s\n' "lite_fast" ;;
+    1|depuracion) printf '%s\n' "depuracion" ;;
+    2|ligero) printf '%s\n' "ligero" ;;
+    3|ligero_rapido) printf '%s\n' "ligero_rapido" ;;
     *)
       echo "Opcion no reconocida: ${opcion}. Usa 1, 2 o 3." >&2
       exit 1
@@ -95,9 +95,9 @@ Fases curriculares de recompensa:
   1) mantener_pose_xml        empieza cerca de la pose ideal y aprende a quedarse ahi
   2) llegar_desde_suelo       empieza peor/en suelo y debe volver a la pose XML
   3) recuperar_desde_caida    recuperacion robusta desde caidas/perturbaciones
-  4) auto_3_fases_200M        supervisor: fases 1->2->3, 200M steps, cambio automatico
+  4) curriculo_3_fases_200M   supervisor: fases 1->2->3, 200M pasos, cambio automatico
 
-  0 existe como base_actual sin curriculum: usa --fase-recompensa 0 si lo necesitas.
+  0 existe como base_actual sin curriculo: usa --fase-recompensa 0 si lo necesitas.
 EOF
   local opcion
   read -r -p "Elige fase curricular [1]: " opcion < /dev/tty
@@ -106,7 +106,7 @@ EOF
     1|mantener|pose|pose_xml) printf '%s\n' "1" ;;
     2|suelo|llegar) printf '%s\n' "2" ;;
     3|caida|recuperar) printf '%s\n' "3" ;;
-    4|auto|curriculum|auto_3_fases|auto-3-fases) printf '%s\n' "auto" ;;
+    4|auto) printf '%s\n' "auto" ;;
     *)
       echo "Opcion no reconocida: ${opcion}. Usa 1, 2, 3 o 4." >&2
       exit 1
@@ -118,7 +118,7 @@ if (( PERFIL_PPO_PASADO == 0 )) && [[ -z "${PERFIL_PPO}" ]]; then
   if [[ -t 0 && -t 1 ]]; then
     PERFIL_PPO="$(elegir_perfil_ppo)"
   else
-    PERFIL_PPO="lite"
+    PERFIL_PPO="ligero"
   fi
 fi
 
@@ -131,24 +131,24 @@ if (( FASE_RECOMPENSA_PASADA == 0 )) && [[ -z "${FASE_RECOMPENSA}" ]]; then
 fi
 
 if [[ "${FASE_RECOMPENSA:-}" == "auto" ]]; then
-  cmd=(./scripts/curriculum_auto_tarantulin.sh \
-    --perfil-ppo "${PERFIL_PPO:-lite}" \
-    --total-steps 200000000)
+  cmd=(./scripts/curriculo_automatico_tarantulin.sh \
+    --perfil-ppo "${PERFIL_PPO:-ligero}" \
+    --pasos-totales 200000000)
   export TARANTULIN_SHOW_PPO_PROFILES=0
   exec "${cmd[@]}"
 fi
 
-cmd=(./scripts/tarantulin_wsl.sh train \
-  --background \
+cmd=(./scripts/tarantulin.sh entrenar \
+  --segundo-plano \
   --setup \
-  --reset-checkpoint)
+  --desde-cero)
 
 if (( FASE_RECOMPENSA_PASADA == 0 )); then
   cmd+=(--fase-recompensa "${FASE_RECOMPENSA:-1}")
 fi
 
 if (( PERFIL_PPO_PASADO == 0 )); then
-  cmd+=(--perfil-ppo "${PERFIL_PPO:-lite}")
+  cmd+=(--perfil-ppo "${PERFIL_PPO:-ligero}")
 fi
 
 export TARANTULIN_SHOW_PPO_PROFILES=0

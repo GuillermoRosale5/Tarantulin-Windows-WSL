@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import csv
 import functools
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import time
 import warnings
@@ -13,10 +15,10 @@ import warnings
 import jax
 import jax.numpy as jp
 
-from mujoco_playground._src import wrapper
+from mujoco_playground import wrapper
 
-from tarantulin.tarantulin_mjx_env import TarantulinStandup
-from tarantulin.tarantulin_mjx_env import default_config
+from tarantulin.entorno_tarantulin_mjx import TarantulinIncorporarse
+from tarantulin.entorno_tarantulin_mjx import default_config
 
 
 warnings.filterwarnings(
@@ -26,20 +28,45 @@ warnings.filterwarnings(
 )
 
 
+def _nvidia_smi_command() -> str | None:
+  wsl_binary = Path("/usr/lib/wsl/lib/nvidia-smi")
+  if wsl_binary.is_file() and os.access(wsl_binary, os.X_OK):
+    return str(wsl_binary)
+  return shutil.which("nvidia-smi")
+
+
 def _vram_mib() -> str:
-  try:
-    out = subprocess.check_output(
-        [
-            "nvidia-smi",
-            "--query-gpu=memory.used",
-            "--format=csv,noheader,nounits",
-        ],
-        text=True,
-        timeout=5,
-    )
-    return out.strip().splitlines()[0]
-  except Exception:
-    return ""
+  """Devuelve VRAM usada sin asumir que todas las GPU son NVIDIA."""
+  accelerator = os.environ.get("TARANTULIN_ACCELERATOR", "auto")
+  if accelerator in {"auto", "nvidia"}:
+    nvidia_smi = _nvidia_smi_command()
+    try:
+      if nvidia_smi is None:
+        raise FileNotFoundError("nvidia-smi no disponible")
+      out = subprocess.check_output(
+          [
+              nvidia_smi,
+              "--query-gpu=memory.used",
+              "--format=csv,noheader,nounits",
+          ],
+          text=True,
+          timeout=5,
+      )
+      return out.strip().splitlines()[0]
+    except Exception:
+      if accelerator == "nvidia":
+        return ""
+
+  if accelerator in {"auto", "amd"}:
+    for card in Path("/sys/class/drm").glob("card*/device"):
+      try:
+        if (card / "vendor").read_text(encoding="ascii").strip() != "0x1002":
+          continue
+        used_bytes = int((card / "mem_info_vram_used").read_text(encoding="ascii"))
+        return str(used_bytes // 1024 // 1024)
+      except (OSError, ValueError):
+        continue
+  return ""
 
 
 def _append_row(csv_path: Path, row: dict[str, str]) -> None:
@@ -88,7 +115,7 @@ def main() -> None:
     cfg.impl = args.impl
     cfg.solver_iterations = args.iterations
     cfg.solver_ls_iterations = args.ls_iterations
-    env = TarantulinStandup(config=cfg)
+    env = TarantulinIncorporarse(config=cfg)
     env = wrapper.wrap_for_brax_training(
         env,
         episode_length=cfg.episode_length,

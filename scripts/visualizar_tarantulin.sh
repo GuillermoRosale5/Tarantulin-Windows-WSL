@@ -9,7 +9,7 @@ XML_DIR="${REPO_ROOT}/tarantulin/xmls"
 
 cd "${REPO_ROOT}"
 
-python_viewer_env() {
+configurar_entorno_visualizador() {
   export PYTHONPATH="${REPO_ROOT}"
   export XLA_PYTHON_CLIENT_ALLOCATOR="${XLA_PYTHON_CLIENT_ALLOCATOR:-platform}"
   export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
@@ -17,7 +17,7 @@ python_viewer_env() {
   export MUJOCO_GL="${MUJOCO_VIEWER_GL:-glfw}"
 }
 
-current_run() {
+ejecucion_actual() {
   if [[ -f "${LAST_RUN}" ]]; then
     local saved
     saved="$(<"${LAST_RUN}")"
@@ -31,7 +31,7 @@ current_run() {
     awk 'NR == 1 {print $2}' || true
 }
 
-select_from_list() {
+elegir_de_lista() {
   local prompt="$1"
   local count="$2"
   local selected
@@ -46,54 +46,54 @@ select_from_list() {
 visualizar_ultimo_checkpoint() {
   echo "Abriendo ultimo checkpoint local (puede ser un entrenamiento parcial)..."
   echo "Esta opcion sigue logs_tarantulin_mjx/ultima_run.txt; no usa la red publicada."
-  exec ./scripts/tarantulin_wsl.sh view-results "$@"
+  exec ./scripts/tarantulin.sh visualizar-resultados "$@"
 }
 
 visualizar_red_preentrenada() {
   echo "Abriendo la red preentrenada recomendada..."
   echo "Fase 2 | paso 45.932.544 | episodio 1500"
   echo "Esta opcion no consulta logs_tarantulin_mjx/ultima_run.txt."
-  exec ./scripts/tarantulin_wsl.sh view-pretrained "$@"
+  exec ./scripts/tarantulin.sh visualizar-red-preentrenada "$@"
 }
 
 visualizar_checkpoint_anterior() {
-  local run_dir
-  run_dir="$(current_run)"
-  if [[ -z "${run_dir}" ]]; then
-    echo "No encuentro ninguna run en ${LOGS_DIR}." >&2
+  local directorio_ejecucion
+  directorio_ejecucion="$(ejecucion_actual)"
+  if [[ -z "${directorio_ejecucion}" ]]; then
+    echo "No encuentro ninguna ejecucion en ${LOGS_DIR}." >&2
     exit 1
   fi
 
   mapfile -t checkpoints < <(
-    find "${run_dir}/checkpoints" -mindepth 1 -maxdepth 1 -type d -printf '%P\n' 2>/dev/null |
+    find "${directorio_ejecucion}/checkpoints" -mindepth 1 -maxdepth 1 -type d -printf '%P\n' 2>/dev/null |
       awk '/^[0-9]+$/' |
       sort -nr
   )
 
   if (( ${#checkpoints[@]} <= 1 )); then
-    echo "No hay checkpoints anteriores en la run actual: ${run_dir}" >&2
-    echo "Run encontrada, pero checkpoints disponibles: ${#checkpoints[@]}" >&2
+    echo "No hay checkpoints anteriores en la ejecucion actual: ${directorio_ejecucion}" >&2
+    echo "Ejecucion encontrada, pero checkpoints disponibles: ${#checkpoints[@]}" >&2
     exit 1
   fi
 
   echo ""
-  echo "Run actual:"
-  echo "  ${run_dir}"
+  echo "Ejecucion actual:"
+  echo "  ${directorio_ejecucion}"
   echo ""
   echo "Checkpoints anteriores:"
-  local i step ckpt_path
+  local i paso ruta_checkpoint
   for (( i = 1; i < ${#checkpoints[@]}; i++ )); do
-    step="${checkpoints[$i]}"
-    ckpt_path="${run_dir}/checkpoints/${step}"
-    printf '  %2d) step %-12s  %s\n' "${i}" "${step}" "$(date -d "@$(stat -c %Y "${ckpt_path}")" '+%Y-%m-%d %H:%M:%S')"
+    paso="${checkpoints[$i]}"
+    ruta_checkpoint="${directorio_ejecucion}/checkpoints/${paso}"
+    printf '  %2d) paso %-12s  %s\n' "${i}" "${paso}" "$(date -d "@$(stat -c %Y "${ruta_checkpoint}")" '+%Y-%m-%d %H:%M:%S')"
   done
 
-  local choice
-  local max_choice="$(( ${#checkpoints[@]} - 1 ))"
-  choice="$(select_from_list "Elige checkpoint anterior [1-${max_choice}]: " "${max_choice}")"
-  ckpt_path="${run_dir}/checkpoints/${checkpoints[$choice]}"
-  echo "Abriendo checkpoint: ${ckpt_path}"
-  exec ./scripts/tarantulin_wsl.sh view-results --checkpoint-path "${ckpt_path}" "$@"
+  local eleccion
+  local maximo="$(( ${#checkpoints[@]} - 1 ))"
+  eleccion="$(elegir_de_lista "Elige checkpoint anterior [1-${maximo}]: " "${maximo}")"
+  ruta_checkpoint="${directorio_ejecucion}/checkpoints/${checkpoints[$eleccion]}"
+  echo "Abriendo checkpoint: ${ruta_checkpoint}"
+  exec ./scripts/tarantulin.sh visualizar-resultados --ruta-checkpoint "${ruta_checkpoint}" "$@"
 }
 
 visualizar_xml() {
@@ -111,11 +111,11 @@ visualizar_xml() {
     printf '  %2d) %-36s  %s\n' "$(( i + 1 ))" "${xmls[$i]}" "$(date -d "@$(stat -c %Y "${xml_path}")" '+%Y-%m-%d %H:%M:%S')"
   done
 
-  local choice xml
-  choice="$(select_from_list "Elige XML [1-${#xmls[@]}]: " "${#xmls[@]}")"
-  xml="${XML_DIR}/${xmls[$(( choice - 1 ))]}"
+  local eleccion xml
+  eleccion="$(elegir_de_lista "Elige XML [1-${#xmls[@]}]: " "${#xmls[@]}")"
+  xml="${XML_DIR}/${xmls[$(( eleccion - 1 ))]}"
 
-  python_viewer_env
+  configurar_entorno_visualizador
   echo "Abriendo XML sin simular: ${xml}"
   "${REPO_ROOT}/.venv/bin/python" - "${xml}" <<'PY'
 from __future__ import annotations
@@ -154,9 +154,9 @@ main() {
   echo "  4) Ver XML sin simular"
   echo ""
 
-  local choice
-  choice="$(select_from_list "Elige opcion [1-4]: " 4)"
-  case "${choice}" in
+  local eleccion
+  eleccion="$(elegir_de_lista "Elige opcion [1-4]: " 4)"
+  case "${eleccion}" in
     1) visualizar_red_preentrenada "$@" ;;
     2) visualizar_ultimo_checkpoint "$@" ;;
     3) visualizar_checkpoint_anterior "$@" ;;

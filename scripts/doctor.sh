@@ -81,14 +81,14 @@ try:
   import jax
   import mujoco
   from mujoco import mjx
-  from tarantulin.tarantulin_mjx_env import TarantulinStandup
+  from tarantulin.entorno_tarantulin_mjx import TarantulinIncorporarse
 except Exception as exc:
   print(f"[FAIL] Imports Python/MJX: {type(exc).__name__}: {exc}")
   raise SystemExit(1)
 
 print(f"[OK]   Python {sys.version.split()[0]}")
 print(f"[OK]   JAX {jax.__version__}; backend={jax.default_backend()}; devices={jax.devices()}")
-print(f"[OK]   MuJoCo {mujoco.__version__}; mjx={mjx.__name__}; env={TarantulinStandup.__name__}")
+print(f"[OK]   MuJoCo {mujoco.__version__}; mjx={mjx.__name__}; env={TarantulinIncorporarse.__name__}")
 expected = __import__("os").environ.get("TARANTULIN_RESOLVED_BACKEND_PROFILE", "cpu")
 backend = jax.default_backend()
 if expected in {"nvidia", "amd"} and backend != "gpu":

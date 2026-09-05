@@ -215,7 +215,7 @@ if git -C "${REPO_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   done
 fi
 
-LAUNCHER="${REPO_ROOT}/scripts/tarantulin_wsl.sh"
+LAUNCHER="${REPO_ROOT}/scripts/tarantulin.sh"
 [[ -f "${LAUNCHER}" ]] || fail "falta el lanzador principal."
 
 LAUNCHER_ARGS="$(
@@ -223,42 +223,42 @@ LAUNCHER_ARGS="$(
 set -euo pipefail
 source "$1"
 LAST_RUN="/tmp/una-run-local-que-no-debe-usarse/ultima_run.txt"
-verify_pretrained_model() { :; }
-view_results() { printf '<%s>\n' "$@"; }
-view_pretrained --dry-run
+verificar_red_preentrenada() { :; }
+visualizar_resultados() { printf '<%s>\n' "$@"; }
+visualizar_red_preentrenada --solo-comprobar
 BASH
 )"
 EXPECTED_LAUNCHER_ARGS="$(printf '<%s>\n' \
-  '--dry-run' \
-  '--checkpoint-path' \
+  '--solo-comprobar' \
+  '--ruta-checkpoint' \
   "${CHECKPOINT_DIR}" \
-  '--episode-length' \
+  '--longitud-episodio' \
   '1500')"
 [[ "${LAUNCHER_ARGS}" == "${EXPECTED_LAUNCHER_ARGS}" ]] || \
-  fail "view-pretrained no fija exclusivamente la red publicada y el episodio 1500."
+  fail "visualizar-red-preentrenada no fija exclusivamente la red publicada y el episodio 1500."
 
 if bash -s -- "${LAUNCHER}" >/dev/null 2>&1 <<'BASH'
 set -euo pipefail
 source "$1"
-verify_pretrained_model() { :; }
-view_results() { :; }
-view_pretrained --checkpoint-path /tmp/red-equivocada
+verificar_red_preentrenada() { :; }
+visualizar_resultados() { :; }
+visualizar_red_preentrenada --ruta-checkpoint /tmp/red-equivocada
 BASH
 then
-  fail "view-pretrained permite sustituir el checkpoint publicado."
+  fail "visualizar-red-preentrenada permite sustituir el checkpoint publicado."
 fi
 
 HELP_OUTPUT="$(
   bash -s -- "${LAUNCHER}" <<'BASH'
 set -euo pipefail
 source "$1"
-verify_pretrained_model() { return 91; }
-view_results() { return 92; }
-view_pretrained --help
+verificar_red_preentrenada() { return 91; }
+visualizar_resultados() { return 92; }
+visualizar_red_preentrenada --help
 BASH
 )"
 [[ "${HELP_OUTPUT}" == *"45.932.544"* && "${HELP_OUTPUT}" == *"ultima_run.txt"* ]] || \
-  fail "la ayuda de view-pretrained no explica la identidad inmutable del modelo."
+  fail "la ayuda de visualizar-red-preentrenada no explica la identidad inmutable del modelo."
 
 CORRUPTED_MODEL_ROOT="$(mktemp -d)"
 cp -a -- "${MODEL_DIR}" "${CORRUPTED_MODEL_ROOT}/model"
@@ -268,7 +268,7 @@ set -euo pipefail
 source "$1"
 PRETRAINED_MODEL_DIR="$2"
 PRETRAINED_CHECKPOINT="${PRETRAINED_MODEL_DIR}/checkpoints/000045932544"
-verify_pretrained_model
+verificar_red_preentrenada
 BASH
 then
   fail "el lanzador acepta una copia alterada de la red preentrenada."

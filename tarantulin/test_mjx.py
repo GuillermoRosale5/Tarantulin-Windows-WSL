@@ -8,8 +8,8 @@ import warnings
 import jax
 import jax.numpy as jp
 
-from tarantulin.tarantulin_mjx_env import TarantulinStandup
-from tarantulin.tarantulin_mjx_env import default_config
+from tarantulin.entorno_tarantulin_mjx import TarantulinIncorporarse
+from tarantulin.entorno_tarantulin_mjx import default_config
 
 
 warnings.filterwarnings(
@@ -39,7 +39,7 @@ def main() -> None:
   cfg.impl = args.impl
   cfg.solver_iterations = args.iterations
   cfg.solver_ls_iterations = args.ls_iterations
-  env = TarantulinStandup(config=cfg)
+  env = TarantulinIncorporarse(config=cfg)
 
   print("XML:", env.xml_path)
   print("nq/nv/nu:", env.mjx_model.nq, env.mjx_model.nv, env.action_size)

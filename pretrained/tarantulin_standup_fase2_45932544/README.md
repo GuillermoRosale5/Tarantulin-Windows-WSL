@@ -3,7 +3,8 @@
 Esta es la red de referencia incluida con TARANTULIN para poder comprobar el
 robot sin entrenar desde cero.
 
-- Perfil PPO: `lite`.
+- Perfil PPO guardado: `lite`, nombre histórico equivalente al perfil actual
+  `ligero`.
 - Fase de recompensa: `2`, levantarse desde el suelo.
 - Semilla: `42`.
 - Checkpoint: `45.932.544` pasos de un objetivo de 100 millones.
@@ -22,7 +23,7 @@ del optimizador que garantice continuar el entrenamiento bit a bit.
 Desde Windows + WSL:
 
 ```powershell
-.\tarantulin.ps1 view-pretrained
+.\tarantulin.ps1 visualizar-red-preentrenada
 ```
 
 Desde Ubuntu o WSL directo:

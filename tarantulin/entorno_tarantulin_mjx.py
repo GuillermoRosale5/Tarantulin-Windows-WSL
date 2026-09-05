@@ -4,12 +4,12 @@ Sistema de aprendizaje en 3 fases basado en imitacion de pose:
 
   Fase 1 – Mantener la pose de referencia (qpos0 del XML).
            El robot empieza cerca de la pose objetivo y aprende a mantenerla.
-           La reward es maxima (1.0) cuando q == qpos0[joints].
+           La recompensa es maxima (1.0) cuando q == qpos0[joints].
            Un curriculum de sigma la va apretando con el tiempo.
 
   Fase 2 – Incorporarse desde el suelo.
            El robot empieza tumbado y debe llegar a la pose de referencia.
-           La misma reward de imitacion guia el objetivo; las penalizaciones
+           La misma recompensa de imitacion guia el objetivo; las penalizaciones
            entran progresivamente via curriculum_penalizaciones.
 
   Fase 3 – Recuperacion robusta.
@@ -19,11 +19,11 @@ Sistema de aprendizaje en 3 fases basado en imitacion de pose:
 
 CLAVE DE DISENO:
   - q_referencia se extrae de qpos0 del XML en el constructor. Si cambias el
-    XML, la reward cambia automaticamente sin tocar config.
+    XML, la recompensa cambia automaticamente sin tocar la configuracion.
   - pose_imitacion_reward = exp(-||q - q_ref||^2 / sigma^2), en [0, 1].
     Vale 1.0 exactamente cuando la pose es identica a la de referencia.
   - sigma se controla via config: empieza ancho (0.45 rad) en fase 1 y se
-    estrecha (0.15 rad) en fase 3. Se puede reducir manualmente entre runs.
+    estrecha (0.15 rad) en fase 3. Se puede reducir manualmente entre ejecuciones.
 """
 
 from __future__ import annotations
@@ -40,22 +40,22 @@ from mujoco import mjx
 from mujoco_playground._src import mjx_env
 
 
-XML_PATH_ORIGINAL = Path(__file__).parent / "xmls" / "TARANTULIN_FINAL.xml"
-XML_PATH_MJX = Path(__file__).parent / "xmls" / "TARANTULIN_MJX.xml"
-XML_PATH_POSE_IDEAL = Path(__file__).parent / "xmls" / "TARANTULIN_POSE_IDEAL.xml"
-MAX_EPISODE_SECONDS = 20.0
-DEFAULT_CTRL_DT = 0.004
-DEFAULT_EPISODE_LENGTH = int(MAX_EPISODE_SECONDS / DEFAULT_CTRL_DT)
-DEBUG_REWARD_VERSION = 2026052002  # fecha: 2026-05-20, v02 altura y gravedad estrictas
+RUTA_XML_POSE_IDEAL = Path(__file__).parent / "xmls" / "TARANTULIN_POSE_IDEAL.xml"
+SEGUNDOS_MAXIMOS_EPISODIO = 20.0
+DT_CONTROL_PREDETERMINADO = 0.004
+LONGITUD_EPISODIO_PREDETERMINADA = int(
+    SEGUNDOS_MAXIMOS_EPISODIO / DT_CONTROL_PREDETERMINADO
+)
+VERSION_DIAGNOSTICO_RECOMPENSA = 2026052002  # fecha: 2026-05-20, v02
 
 
-def _quat_normalize(quat: jax.Array) -> jax.Array:
-    return quat / jp.maximum(jp.linalg.norm(quat), 1e-6)
+def _normalizar_cuaternion(cuaternion: jax.Array) -> jax.Array:
+    return cuaternion / jp.maximum(jp.linalg.norm(cuaternion), 1e-6)
 
 
-def _quat_multiply(lhs: jax.Array, rhs: jax.Array) -> jax.Array:
-    lw, lx, ly, lz = lhs
-    rw, rx, ry, rz = rhs
+def _multiplicar_cuaterniones(izquierdo: jax.Array, derecho: jax.Array) -> jax.Array:
+    lw, lx, ly, lz = izquierdo
+    rw, rx, ry, rz = derecho
     return jp.array([
         lw * rw - lx * rx - ly * ry - lz * rz,
         lw * rx + lx * rw + ly * rz - lz * ry,
@@ -64,7 +64,7 @@ def _quat_multiply(lhs: jax.Array, rhs: jax.Array) -> jax.Array:
     ])
 
 
-def _quat_from_euler_xyz(
+def _cuaternion_desde_euler_xyz(
     roll: jax.Array, pitch: jax.Array, yaw: jax.Array
 ) -> jax.Array:
     half_roll = 0.5 * roll
@@ -85,25 +85,25 @@ def default_config() -> config_dict.ConfigDict:
     """Configuracion fisica y de recompensa del entorno."""
 
     return config_dict.create(
-        # --- Simulacion ---
-        ctrl_dt=DEFAULT_CTRL_DT,
+        # --- Simulación ---
+        ctrl_dt=DT_CONTROL_PREDETERMINADO,
         sim_dt=0.002,
-        episode_length=DEFAULT_EPISODE_LENGTH,
-        max_episode_seconds=MAX_EPISODE_SECONDS,
+        episode_length=LONGITUD_EPISODIO_PREDETERMINADA,
+        max_episode_seconds=SEGUNDOS_MAXIMOS_EPISODIO,
         action_repeat=1,
         impl="jax",
-        xml_path=XML_PATH_POSE_IDEAL.as_posix(),
+        xml_path=RUTA_XML_POSE_IDEAL.as_posix(),
         naconmax=64,
         njmax=64,
         solver_iterations=12,
         solver_ls_iterations=4,
 
-        # --- Curriculum ---
+        # --- Currículo ---
         fase_curriculum_recompensa=0,
         nombre_curriculum_recompensa="base_actual",
         interacciones_minimas_curriculum_recompensa=0,
 
-        # --- Reset ---
+        # --- Reinicio del entorno ---
         reset_pose_mode="default",
         reset_noise_scale=0.01,
         reset_randomize_state=True,
@@ -130,15 +130,18 @@ def default_config() -> config_dict.ConfigDict:
         usar_filtros_contacto_recompensa=True,
         include_last_action=True,
         exclude_xy_position=True,
-        # Incluye error de pose (q_actual - q_ref) en la obs. Ayuda a la red a
-        # saber cuanto le falta para la pose objetivo sin deducirlo del qpos.
+        # Incluye el error de postura (q_actual - q_ref) en la observación.
+        # Ayuda a la red a saber cuánto le falta para alcanzar la postura
+        # objetivo sin tener que deducirlo de qpos.
         include_pose_error=True,
-        # Flags para que la reward use referencias extraidas del XML activo.
-        # Si False, se usan los valores fallback de config (target_body_z, etc).
+        # Indicadores para que la recompensa use referencias extraídas del XML
+        # activo.
+        # Si es falso, se usan los valores alternativos de configuración
+        # (target_body_z, etc.).
         usar_altura_referencia_xml=True,
         usar_pose_referencia_xml=True,
 
-        # --- Terminacion ---
+        # --- Terminación ---
         terminate_when_unhealthy=False,
         disable_done=False,
         healthy_z_min=0.03,
@@ -158,16 +161,16 @@ def default_config() -> config_dict.ConfigDict:
         action_mode="direct",
         action_tanh_scale=0.25,
 
-        # --- Curriculum de penalizaciones ---
+        # --- Currículo de penalizaciones ---
         # k_c = clip(curriculum_penalizaciones, 0, 1) escala TODAS las penalizaciones.
-        # Comienza en 0 (penalizaciones inactivas) y sube manualmente entre runs.
+        # Comienza en 0 (penalizaciones inactivas) y sube manualmente entre ejecuciones.
         curriculum_penalizaciones=0.0,
 
         # ================================================================
-        # REWARD DE IMITACION DE POSE (senal principal del sistema)
+        # RECOMPENSA DE IMITACIÓN DE POSTURA (señal principal del sistema)
         # ================================================================
         # La pose de referencia se lee de qpos0 del XML en __init__.
-        # No hay que tocar ningun angulo en config: si cambias el XML,
+        # No hay que tocar ningún ángulo en la configuración: si cambias el XML,
         # la referencia cambia sola.
         #
         # Vale 1.0 cuando q_joints == qpos0[joints] exactamente.
@@ -178,7 +181,7 @@ def default_config() -> config_dict.ConfigDict:
         #   0.15 rad  (~9 deg) -> fase 3: estricto, exige pose casi perfecta
         pose_imitacion_reward_weight=5.0,
         pose_imitacion_sigma=0.45,
-        # Reward compuesta de exito final: pose XML + torso nivelado +
+        # Recompensa compuesta de éxito final: postura XML + torso nivelado +
         # altura XML + contactos validos. Mantiene pose_imitacion como
         # gradiente auxiliar, pero reserva la recompensa maxima para la
         # postura realmente buena.
@@ -186,19 +189,19 @@ def default_config() -> config_dict.ConfigDict:
         pose_xml_final_tilt_sigma_deg=7.0,
         pose_xml_final_height_sigma=0.025,
 
-        # --- Rewards de apoyo ---
+        # --- Recompensas de apoyo ---
         vector_gravedad_reward_weight=0.50,
         vector_gravedad_base_reward_weight=0.0,
-        # sigma para la reward de orientacion (vector gravedad lateral).
+        # Sigma para la recompensa de orientación (vector de gravedad lateral).
         # 0.02 rad -> exige torso practicamente plano.
         vector_gravedad_sigma=0.02,
-        # Version inspirada en la reward antigua estable:
+        # Versión inspirada en la recompensa antigua estable:
         # score = 1 - (g_body_x^2 + g_body_y^2), filtrada por contacto valido.
         vector_gravedad_estabilidad_reward_weight=0.0,
         cuerpo_paralelo_reward_weight=0.60,
         cuerpo_paralelo_sigma=0.064,
         altura_reward_weight=0.50,
-        # target_body_z: fallback cuando usar_altura_referencia_xml=False.
+        # target_body_z: valor alternativo cuando usar_altura_referencia_xml=False.
         # Con usar_altura_referencia_xml=True se usa self._ref_body_z del XML.
         target_body_z=0.10,
         target_height_sigma=0.02,
@@ -222,7 +225,7 @@ def default_config() -> config_dict.ConfigDict:
         q3_separados_centro_reward_weight=0.0,
         simetria_patas_reward_weight=0.0,
 
-        # --- Quietud (util en fase 1 para estabilizar) ---
+        # --- Quietud (útil en fase 1 para estabilizar) ---
         velocidad_lineal_cero_reward_weight=0.0,
         velocidad_lineal_cero_sigma=0.05,
         velocidad_angular_cero_reward_weight=0.0,
@@ -245,13 +248,13 @@ def default_config() -> config_dict.ConfigDict:
         cambio_accion_penalty_weight=0.005,
         limite_articular_penalty_weight=0.03,
 
-        # --- Contacto invalido ---
+        # --- Contacto inválido ---
         terminate_on_persistent_invalid_ground_contact=True,
         invalid_ground_contact_done_steps=40,
         body_or_chassis_ground_contact_done_steps=12,
         contacto_invalido_penalty_count_scale=2.0,
 
-        # --- Geometria de soporte ---
+        # --- Geometría de soporte ---
         support_center_margin=0.08,
         min_foot_contacts_for_support=3,
         plano_CoG_arana_target=0.10,
@@ -270,18 +273,18 @@ def default_config() -> config_dict.ConfigDict:
         q3_below_body_target_margin=0.18,
         leg_symmetry_tolerance_deg=45.0,
 
-        # --- Sigmas de penalizacion ---
+        # --- Sigmas de penalización ---
         base_vertical_velocity_sigma=0.40,
         base_angular_velocity_sigma=3.0,
         joint_limit_margin_fraction=0.20,
         cambio_accion_sigma=0.35,
 
-        # --- Clipeo de reward ---
+        # --- Recorte de la recompensa ---
         clipear_reward_minimo=True,
         reward_clip_min=-5.0,
         reward_clip_max=5.0,
 
-        # --- Herencia (mantenidas por compatibilidad con codigo externo) ---
+        # --- Valores anteriores mantenidos por compatibilidad con código externo ---
         max_tilt_degrees=15.0,
         max_survival_tilt_degrees=60.0,
         target_height_min=0.26,
@@ -294,10 +297,10 @@ def default_config() -> config_dict.ConfigDict:
     )
 
 
-class TarantulinStandup(mjx_env.MjxEnv):
+class TarantulinIncorporarse(mjx_env.MjxEnv):
     """Entorno de aprendizaje para TARANTULIN con imitacion de pose.
 
-    La reward principal (pose_imitacion) es maxima cuando el robot replica
+    La recompensa principal (pose_imitacion) es maxima cuando el robot replica
     exactamente el qpos0 del XML. Al cambiar el XML, el objetivo cambia
     automaticamente sin tocar ninguna linea de config.
     """
@@ -327,7 +330,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         self._qvel0 = jp.zeros(self._mj_model.nv)
         self._ctrl_range = jp.array(self._mj_model.actuator_ctrlrange)
 
-        leg_configs = self._build_leg_configs()
+        leg_configs = self._construir_configuraciones_patas()
         self._q1_qpos_adrs = jp.array(
             [leg["q1_qpos_adr"] for leg in leg_configs], dtype=jp.int32
         )
@@ -393,10 +396,10 @@ class TarantulinStandup(mjx_env.MjxEnv):
         # angulos de la pose objetivo. Cuando modificas el XML y recreas
         # el entorno, esta referencia cambia automaticamente.
         #
-        # En TARANTULIN_POSE_IDEAL.xml todos los joints actuados valen 0
+        # En TARANTULIN_POSE_IDEAL.xml todas las articulaciones actuadas valen 0
         # (la pose esta horneada en la geometria), asi que _q_referencia
         # sera un vector de 12 ceros. Aun asi el codigo es correcto para
-        # cualquier XML con joints distintos de cero.
+        # cualquier XML con articulaciones distintas de cero.
         # ================================================================
         self._q_referencia = jp.concatenate([
             self._qpos0[self._q1_qpos_adrs],
@@ -431,7 +434,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
         self._ref_q3_radial_distances = jp.linalg.norm(ref_q3_xy - ref_body_xy, axis=1)
         # Altura objetivo: usa la del XML si usar_altura_referencia_xml=True,
-        # si no usa el fallback de config. Calculado aqui (fuera del JIT).
+        # si no usa el valor alternativo de configuración. Calculado aquí (fuera del JIT).
         if bool(self._config.get("usar_altura_referencia_xml", True)):
             self._target_body_z_actual = self._ref_body_z
         else:
@@ -443,7 +446,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
     # CONSTRUCCION DE PATAS
     # =====================================================================
 
-    def _build_leg_configs(self) -> tuple[dict[str, Any], ...]:
+    def _construir_configuraciones_patas(self) -> tuple[dict[str, Any], ...]:
         legs = []
         for leg_index in range(1, 5):
             q1 = self._mj_model.joint(f"ID_{leg_index}1_q1")
@@ -468,7 +471,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         return tuple(legs)
 
     # =====================================================================
-    # RESET
+    # REINICIO DEL ENTORNO
     # =====================================================================
 
     def reset(self, rng: jax.Array) -> mjx_env.State:
@@ -574,13 +577,15 @@ class TarantulinStandup(mjx_env.MjxEnv):
                 minval=-joint_noise_rad[:, None],
                 maxval=joint_noise_rad[:, None],
             )
-            sampled_quat = _quat_from_euler_xyz(
+            sampled_quat = _cuaternion_desde_euler_xyz(
                 body_angles[0], body_angles[1], body_angles[2]
             )
             qpos = qpos.at[0:2].add(body_xy_noise)
             qpos = qpos.at[2].add(body_z_noise)
             qpos = qpos.at[3:7].set(
-                _quat_normalize(_quat_multiply(sampled_quat, self._qpos0[3:7]))
+                _normalizar_cuaternion(
+                    _multiplicar_cuaterniones(sampled_quat, self._qpos0[3:7])
+                )
             )
             qpos = qpos.at[self._q1_qpos_adrs].add(joint_noise[0])
             qpos = qpos.at[self._q2_qpos_adrs].add(joint_noise[1])
@@ -610,7 +615,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         data = mjx.forward(self.mjx_model, data)
 
         if _project_to_floor:
-            foot_bottom_offsets = self._foot_bottom_offsets(data)
+            foot_bottom_offsets = self._desfases_inferiores_pies(data)
             body_z_correction = (
                 jp.min(foot_bottom_offsets) - self._config.reset_foot_ground_margin
             )
@@ -679,7 +684,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             "episode_length_steps": episode_length_steps.astype(jp.float32),
             "grace_steps": grace_steps.astype(jp.float32),
         }
-        metrics = self._empty_metrics()
+        metrics = self._crear_metricas_vacias()
         obs = self._get_obs(data, info)
         return mjx_env.State(
             data=data, obs=obs,
@@ -688,12 +693,12 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
 
     # =====================================================================
-    # STEP
+    # PASO DE SIMULACIÓN
     # =====================================================================
 
     def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
         action = jp.clip(action, -1.0, 1.0)
-        applied_action = self._action_to_control(action)
+        applied_action = self._convertir_accion_a_control(action)
         data = mjx_env.step(
             self.mjx_model, state.data, applied_action, self.n_substeps
         )
@@ -707,7 +712,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             invalid_ground_contact_count,
             body_or_chassis_touching_ground,
             *_,
-        ) = self._invalid_ground_contact_info(data)
+        ) = self._informacion_contactos_suelo_invalidos(data)
 
         contacto_invalido_penalty = jp.clip(
             invalid_ground_contact_count
@@ -725,10 +730,10 @@ class TarantulinStandup(mjx_env.MjxEnv):
             state.info["body_or_chassis_ground_contact_steps"] + 1.0,
             0.0,
         )
-        foot_contacts = self._foot_ground_contact_mask(data)
-        total_foot_clearance = self._total_foot_clearance(data)
+        foot_contacts = self._mascara_contactos_pies_suelo(data)
+        total_foot_clearance = self._separacion_total_pies_suelo(data)
         alive_requirements_met = (
-            self._supervivencia_gate(data, invalid_ground_contact) > 0.5
+            self._compuerta_supervivencia(data, invalid_ground_contact) > 0.5
         )
         alive_reward_steps = jp.where(
             alive_requirements_met,
@@ -768,12 +773,12 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
 
     # =====================================================================
-    # METRICAS
+    # MÉTRICAS
     # =====================================================================
 
-    def _empty_metrics(self) -> dict[str, jax.Array]:
+    def _crear_metricas_vacias(self) -> dict[str, jax.Array]:
         names = (
-            # --- Reward principal ---
+            # --- Recompensa principal ---
             "pose_imitacion_reward_ponderado",
             "pose_xml_final_reward_ponderado",
             "state/pose_imitacion_reward",
@@ -784,7 +789,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             "state/pose_imitacion_error_medio_deg",
             "state/pose_imitacion_sigma",
             "state/pose_imitacion_porcentaje",
-            # --- Rewards de apoyo (ponderadas) ---
+            # --- Recompensas de apoyo (ponderadas) ---
             "supervivencia_reward_ponderado",
             "vector_gravedad_reward_ponderado",
             "vector_gravedad_estabilidad_reward_ponderado",
@@ -800,7 +805,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             "velocidad_lineal_cero_reward_ponderado",
             "velocidad_angular_cero_reward_ponderado",
             "velocidad_articular_cero_reward_ponderado",
-            # --- Gates de soporte ---
+            # --- Compuertas de soporte ---
             "state/support_gate",
             "state/pose_gate",
             "state/height_gate",
@@ -834,10 +839,10 @@ class TarantulinStandup(mjx_env.MjxEnv):
             "control_penalty_ponderado",
             "cambio_accion_penalty_ponderado",
             "limite_articular_penalty_ponderado",
-            # --- Curriculum ---
+            # --- Currículo ---
             "reward/fase_curriculum",
             "state/k_c_curriculum_penalizaciones",
-            # --- Terminacion ---
+            # --- Terminación ---
             "done/nonfinite",
             "done/critical_z",
             "done/qpos_explosive",
@@ -858,7 +863,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             "state/foot_contacts",
             "state/num_valid_foot_contacts",
             "state/total_foot_clearance",
-            # --- Estado de rewards ---
+            # --- Estado de las recompensas ---
             "state/supervivencia_reward",
             "state/vector_gravedad_reward",
             "state/vector_gravedad_lineal_reward_base",
@@ -891,7 +896,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             "state/g_body_x",
             "state/g_body_y",
             "state/g_body_z",
-            # --- Debug ---
+            # --- Diagnóstico ---
             "debug/version",
             "debug/reward_version",
             "debug/ref_body_z",
@@ -927,7 +932,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
     # CONTROL
     # =====================================================================
 
-    def _action_to_control(self, action: jax.Array) -> jax.Array:
+    def _convertir_accion_a_control(self, action: jax.Array) -> jax.Array:
         if str(self._config.action_mode) == "tanh":
             scaled_action = float(self._config.action_tanh_scale) * jp.tanh(action)
         else:
@@ -935,13 +940,13 @@ class TarantulinStandup(mjx_env.MjxEnv):
         return jp.clip(scaled_action, self._ctrl_range[:, 0], self._ctrl_range[:, 1])
 
     # =====================================================================
-    # REWARD PRINCIPAL: IMITACION DE POSE
+    # RECOMPENSA PRINCIPAL: IMITACIÓN DE POSTURA
     # =====================================================================
 
-    def _pose_imitacion_reward(self, data: mjx.Data) -> tuple[jax.Array, jax.Array]:
-        """Reward de imitacion de pose respecto a qpos0 del XML.
+    def _recompensa_imitacion_pose(self, data: mjx.Data) -> tuple[jax.Array, jax.Array]:
+        """Recompensa de imitacion de pose respecto a qpos0 del XML.
 
-        Devuelve (reward [0, 1], error_rms_en_radianes).
+        Devuelve (recompensa [0, 1], error_rms_en_radianes).
 
         Vale 1.0 exactamente cuando todos los angulos de las articulaciones
         coinciden con los angulos del qpos0 del XML (la pose de referencia).
@@ -971,16 +976,16 @@ class TarantulinStandup(mjx_env.MjxEnv):
         return reward, error_rms
 
     # =====================================================================
-    # REWARDS DE APOYO
+    # RECOMPENSAS DE APOYO
     # =====================================================================
 
-    def _gravity_in_body_frame(self, data: mjx.Data) -> jax.Array:
+    def _gravedad_en_referencia_cuerpo(self, data: mjx.Data) -> jax.Array:
         rotation_body_to_world = data.xmat[self._main_body_id]
         gravity_world = jp.array([0.0, 0.0, -1.0], dtype=jp.float32)
         return rotation_body_to_world.T @ gravity_world
 
-    def _is_upside_down(self, data: mjx.Data) -> jax.Array:
-        return self._gravity_in_body_frame(data)[2] > 0.0
+    def _esta_boca_abajo(self, data: mjx.Data) -> jax.Array:
+        return self._gravedad_en_referencia_cuerpo(data)[2] > 0.0
 
     def _estado_valido(self, data: mjx.Data) -> jax.Array:
         finite = jp.isfinite(data.qpos).all() & jp.isfinite(data.qvel).all()
@@ -988,15 +993,15 @@ class TarantulinStandup(mjx_env.MjxEnv):
         qvel_ok = jp.max(jp.abs(data.qvel)) < self._config.explosive_qvel_limit
         return finite & qpos_ok & qvel_ok
 
-    def _supervivencia_gate(
+    def _compuerta_supervivencia(
         self, data: mjx.Data, invalid_ground_contact: jax.Array
     ) -> jax.Array:
         del invalid_ground_contact
         z = data.xpos[self._main_body_id, 2]
         inclinacion_menor_60 = (
-            self._tilt_degrees(data) < self._config.max_survival_tilt_degrees
+            self._inclinacion_grados(data) < self._config.max_survival_tilt_degrees
         )
-        no_boca_arriba = ~self._is_upside_down(data)
+        no_boca_arriba = ~self._esta_boca_abajo(data)
         altura_segura = (
             (z > self._config.critical_z_min) & (z < self._config.critical_z_max)
         )
@@ -1006,9 +1011,9 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
         return gate.astype(jp.float32)
 
-    def _altura_reward(self, z: jax.Array) -> jax.Array:
+    def _recompensa_altura(self, z: jax.Array) -> jax.Array:
         # target_z viene del forward de qpos0 del XML (self._target_body_z_actual),
-        # calculado en __init__. Si usar_altura_referencia_xml=False, usa el fallback.
+        # calculado en __init__. Si usar_altura_referencia_xml=False, usa el valor alternativo.
         sigma = jp.maximum(
             jp.array(float(self._config.target_height_sigma), dtype=jp.float32), 1e-6
         )
@@ -1016,7 +1021,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             jp.exp(-jp.square((z - self._target_body_z_actual) / sigma)), 0.0, 1.0
         )
 
-    def _altura_exceso_penalty(self, z: jax.Array) -> jax.Array:
+    def _penalizacion_altura_excesiva(self, z: jax.Array) -> jax.Array:
         """Castiga solo subir por encima de la altura XML con una tolerancia pequena."""
 
         tolerancia = jp.array(
@@ -1031,7 +1036,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         exceso = jp.maximum(0.0, z - self._target_body_z_actual - tolerancia)
         return jp.clip(jp.square(exceso / sigma), 0.0, 1.0)
 
-    def _altura_baja_penalty(self, z: jax.Array) -> jax.Array:
+    def _penalizacion_altura_baja(self, z: jax.Array) -> jax.Array:
         """Castiga hundir el cuerpo por debajo de la altura XML."""
 
         tolerancia = jp.array(
@@ -1046,15 +1051,15 @@ class TarantulinStandup(mjx_env.MjxEnv):
         defecto = jp.maximum(0.0, self._target_body_z_actual - z - tolerancia)
         return jp.clip(jp.square(defecto / sigma), 0.0, 1.0)
 
-    def _vector_gravedad_reward(self, data: mjx.Data) -> jax.Array:
-        """Reward de orientacion basada en el vector gravedad en el frame del cuerpo.
+    def _recompensa_vector_gravedad(self, data: mjx.Data) -> jax.Array:
+        """Recompensa de orientación basada en la gravedad respecto al cuerpo.
 
         Vale 1 cuando el cuerpo esta perfectamente horizontal (gravedad alineada
         con el eje -Z del cuerpo). Cae cuando el cuerpo se inclina.
 
         sigma=0.35 rad → gradiente util hasta ~20 deg de inclinacion.
         """
-        g_body = self._gravity_in_body_frame(data)
+        g_body = self._gravedad_en_referencia_cuerpo(data)
         gravity_lateral_sq = jp.square(g_body[0]) + jp.square(g_body[1])
         sigma = jp.maximum(
             jp.array(float(self._config.get("vector_gravedad_sigma", 0.35)),
@@ -1063,10 +1068,10 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
         return jp.clip(jp.exp(-gravity_lateral_sq / jp.square(sigma)), 0.0, 1.0)
 
-    def _cuerpo_paralelo_reward(self, data: mjx.Data) -> jax.Array:
+    def _recompensa_cuerpo_paralelo(self, data: mjx.Data) -> jax.Array:
         """Version mas estricta de nivelacion para que el torso quede plano."""
 
-        g_body = self._gravity_in_body_frame(data)
+        g_body = self._gravedad_en_referencia_cuerpo(data)
         gravity_lateral_sq = jp.square(g_body[0]) + jp.square(g_body[1])
         sigma = jp.maximum(
             jp.array(float(self._config.get("cuerpo_paralelo_sigma", 0.18)),
@@ -1075,7 +1080,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
         return jp.clip(jp.exp(-gravity_lateral_sq / jp.square(sigma)), 0.0, 1.0)
 
-    def _apertura_efectores_xml_reward(self, data: mjx.Data) -> jax.Array:
+    def _recompensa_apertura_efectores_xml(self, data: mjx.Data) -> jax.Array:
         """Mantiene los pies q4 abiertos como en el forward de qpos0 del XML."""
 
         body_xy = data.xpos[self._main_body_id, :2]
@@ -1089,7 +1094,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         error_mse = jp.mean(jp.square(radial_distances - self._ref_effector_radial_distances))
         return jp.clip(jp.exp(-error_mse / jp.square(sigma)), 0.0, 1.0)
 
-    def _q3_distancia_xml_reward(self, data: mjx.Data) -> jax.Array:
+    def _recompensa_distancia_q3_xml(self, data: mjx.Data) -> jax.Array:
         """Evita que las rodillas/q3 colapsen hacia el centro respecto al XML."""
 
         body_xy = data.xpos[self._main_body_id, :2]
@@ -1103,7 +1108,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         error_mse = jp.mean(jp.square(radial_distances - self._ref_q3_radial_distances))
         return jp.clip(jp.exp(-error_mse / jp.square(sigma)), 0.0, 1.0)
 
-    def _contactos_suelo_reward(self, foot_contacts: jax.Array) -> jax.Array:
+    def _recompensa_contactos_suelo(self, foot_contacts: jax.Array) -> jax.Array:
         valid_contact_count = jp.sum(foot_contacts.astype(jp.float32))
         required_contacts = jp.maximum(
             jp.array(float(self._config.min_foot_contacts_for_support), dtype=jp.float32),
@@ -1111,7 +1116,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
         return jp.clip(valid_contact_count / required_contacts, 0.0, 1.0)
 
-    def _q1_centrados_reward(self, data: mjx.Data) -> jax.Array:
+    def _recompensa_q1_centrados(self, data: mjx.Data) -> jax.Array:
         q1_values = data.qpos[self._q1_qpos_adrs]
         q1_neutral = self._qpos0[self._q1_qpos_adrs]
         sigma = jp.maximum(jp.deg2rad(self._config.q1_center_sigma_deg), 1e-6)
@@ -1119,7 +1124,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             jp.exp(-jp.mean(jp.square((q1_values - q1_neutral) / sigma))), 0.0, 1.0
         )
 
-    def _triangle_support_reward(
+    def _recompensa_soporte_triangular(
         self, triangle_xy: jax.Array, point_xy: jax.Array
     ) -> jax.Array:
         center = jp.mean(triangle_xy, axis=0)
@@ -1151,7 +1156,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             jp.where(signed_margin >= 0.0, inside_reward, outside_reward), 0.0, 1.0
         )
 
-    def _poligono_CoG_reward(
+    def _recompensa_poligono_cog(
         self, data: mjx.Data, foot_contacts: jax.Array
     ) -> jax.Array:
         effector_xy = data.geom_xpos[self._effector_geom_ids, :2]
@@ -1163,34 +1168,36 @@ class TarantulinStandup(mjx_env.MjxEnv):
 
         def normalizar_triangulo(indices: jax.Array) -> jax.Array:
             valid = jp.all(foot_contacts[indices])
-            valor_reward = self._triangle_support_reward(effector_xy[indices], com_xy)
+            valor_reward = self._recompensa_soporte_triangular(
+                effector_xy[indices], com_xy
+            )
             return jp.where(valid, valor_reward, 0.0)
 
         triangulos_reward = jax.vmap(normalizar_triangulo)(triangles)
         return jp.where(contact_count >= 3.0, jp.max(triangulos_reward), 0.0)
 
-    def _soporte_estatico_reward(
+    def _recompensa_soporte_estatico(
         self, data: mjx.Data, foot_contacts: jax.Array
     ) -> jax.Array:
-        contactos = self._contactos_suelo_reward(foot_contacts)
-        poligono = self._poligono_CoG_reward(data, foot_contacts)
+        contactos = self._recompensa_contactos_suelo(foot_contacts)
+        poligono = self._recompensa_poligono_cog(data, foot_contacts)
         return contactos * poligono
 
-    def _velocidad_lineal_cero_reward(self, data: mjx.Data) -> jax.Array:
+    def _recompensa_velocidad_lineal_cero(self, data: mjx.Data) -> jax.Array:
         vel_lineal = data.qvel[0:3]
         sigma = jp.maximum(self._config.velocidad_lineal_cero_sigma, 1e-6)
         return jp.clip(
             jp.exp(-jp.sum(jp.square(vel_lineal)) / jp.square(sigma)), 0.0, 1.0
         )
 
-    def _velocidad_angular_cero_reward(self, data: mjx.Data) -> jax.Array:
+    def _recompensa_velocidad_angular_cero(self, data: mjx.Data) -> jax.Array:
         vel_angular = data.qvel[3:6]
         sigma = jp.maximum(self._config.velocidad_angular_cero_sigma, 1e-6)
         return jp.clip(
             jp.exp(-jp.sum(jp.square(vel_angular)) / jp.square(sigma)), 0.0, 1.0
         )
 
-    def _velocidad_articular_cero_reward(self, data: mjx.Data) -> jax.Array:
+    def _recompensa_velocidad_articular_cero(self, data: mjx.Data) -> jax.Array:
         qvel_joints = data.qvel[self._joint_dof_adrs]
         sigma = jp.maximum(
             jp.array(float(self._config.get("velocidad_articular_cero_sigma", 2.0)),
@@ -1201,12 +1208,12 @@ class TarantulinStandup(mjx_env.MjxEnv):
             jp.exp(-jp.mean(jp.square(qvel_joints / sigma))), 0.0, 1.0
         )
 
-    def _efector_encima_q3_penalty(self, data: mjx.Data) -> jax.Array:
-        excess = self._effector_above_q3_excess(data)
+    def _penalizacion_efector_sobre_q3(self, data: mjx.Data) -> jax.Array:
+        excess = self._exceso_efector_sobre_q3(data)
         scale = jp.maximum(self._config.effector_q3_z_scale, 1e-6)
         return jp.clip(jp.mean(jp.square(excess / scale)), 0.0, 1.0)
 
-    def _limite_articular_penalty(self, data: mjx.Data) -> jax.Array:
+    def _penalizacion_limite_articular(self, data: mjx.Data) -> jax.Array:
         q = data.qpos[self._joint_qpos_adrs]
         low = self._joint_ranges[:, 0]
         high = self._joint_ranges[:, 1]
@@ -1221,7 +1228,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         return jp.clip(jp.mean(jp.square(limit_pressure)), 0.0, 1.0)
 
     # =====================================================================
-    # TERMINACION
+    # TERMINACIÓN
     # =====================================================================
 
     def _get_done(
@@ -1262,9 +1269,9 @@ class TarantulinStandup(mjx_env.MjxEnv):
             )
         )
         tilt_60_done = (
-            self._tilt_degrees(data) > self._config.max_survival_tilt_degrees
+            self._inclinacion_grados(data) > self._config.max_survival_tilt_degrees
         )
-        boca_arriba_done = self._is_upside_down(data)
+        boca_arriba_done = self._esta_boca_abajo(data)
         catastrophic = (
             (~finite) | (~qpos_ok) | (~qvel_ok)
             | persistent_invalid_contact | body_or_chassis_invalid_contact
@@ -1273,7 +1280,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         return (catastrophic | time_done).astype(jp.float32)
 
     # =====================================================================
-    # CALCULO DE RECOMPENSA
+    # CÁLCULO DE LA RECOMPENSA
     # =====================================================================
 
     def _calcular_recompensa(
@@ -1305,7 +1312,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             body_or_chassis_touching_ground,
             elbow_or_knee_touching_ground,
             *_rest,
-        ) = self._invalid_ground_contact_info(data)
+        ) = self._informacion_contactos_suelo_invalidos(data)
 
         time_done = step_count >= episode_length_steps
         done_nonfinite = ~finite
@@ -1340,9 +1347,9 @@ class TarantulinStandup(mjx_env.MjxEnv):
                 >= self._config.body_or_chassis_ground_contact_done_steps
             )
         )
-        tilt_degrees = self._tilt_degrees(data)
+        tilt_degrees = self._inclinacion_grados(data)
         tilt_60 = tilt_degrees > self._config.max_survival_tilt_degrees
-        boca_arriba = self._is_upside_down(data)
+        boca_arriba = self._esta_boca_abajo(data)
         terminal_failure = (
             done_nonfinite | done_critical_z
             | done_qpos_explosive | done_qvel_explosive
@@ -1354,20 +1361,20 @@ class TarantulinStandup(mjx_env.MjxEnv):
         cambio_accion = action - last_action
 
         # =================================================================
-        # REWARDS (jerarquia clara)
+        # RECOMPENSAS (jerarquía clara)
         # =================================================================
 
         # 1. POSE (senal principal): imitacion de qpos0 del XML.
-        pose_imitacion_reward, error_rms_rad = self._pose_imitacion_reward(data)
+        pose_imitacion_reward, error_rms_rad = self._recompensa_imitacion_pose(data)
 
         # 2. ALTURA: distancia a la z de referencia del XML (no hardcodeada).
-        altura_reward = self._altura_reward(z)
-        altura_exceso_penalty = self._altura_exceso_penalty(z)
-        altura_baja_penalty = self._altura_baja_penalty(z)
+        altura_reward = self._recompensa_altura(z)
+        altura_exceso_penalty = self._penalizacion_altura_excesiva(z)
+        altura_baja_penalty = self._penalizacion_altura_baja(z)
         error_altura_xml = z - self._target_body_z_actual
 
         # 3. ORIENTACION: vector gravedad con sigma.
-        gravity_body = self._gravity_in_body_frame(data)
+        gravity_body = self._gravedad_en_referencia_cuerpo(data)
         gravity_lateral_error = (
             jp.square(gravity_body[0]) + jp.square(gravity_body[1])
         )
@@ -1378,24 +1385,27 @@ class TarantulinStandup(mjx_env.MjxEnv):
         vector_gravedad_lineal_reward = (
             vector_gravedad_lineal_reward_base * upright_direction_gate
         )
-        vector_gravedad_reward = self._vector_gravedad_reward(data)
-        cuerpo_paralelo_reward = self._cuerpo_paralelo_reward(data)
+        vector_gravedad_reward = self._recompensa_vector_gravedad(data)
+        cuerpo_paralelo_reward = self._recompensa_cuerpo_paralelo(data)
 
         # 4. QUIETUD.
-        velocidad_lineal_cero_reward = self._velocidad_lineal_cero_reward(data)
-        velocidad_angular_cero_reward = self._velocidad_angular_cero_reward(data)
-        velocidad_articular_cero_reward = self._velocidad_articular_cero_reward(data)
+        velocidad_lineal_cero_reward = self._recompensa_velocidad_lineal_cero(data)
+        velocidad_angular_cero_reward = self._recompensa_velocidad_angular_cero(data)
+        velocidad_articular_cero_reward = self._recompensa_velocidad_articular_cero(data)
 
-        # 5. SUPERVIVENCIA (gate binario).
-        supervivencia_reward = self._supervivencia_gate(data, invalid_ground_contact)
+        # 5. SUPERVIVENCIA (compuerta binaria).
+        supervivencia_reward = self._compuerta_supervivencia(
+            data, invalid_ground_contact
+        )
 
-        # 6. CONTACTO Y SOPORTE: filtrados por gate suave de pose/altura/orientacion.
+        # 6. CONTACTO Y SOPORTE: filtrados por una compuerta suave de postura,
+        #    altura y orientación.
         #    Si el robot se tumba y toca mucho suelo pero no se parece al XML,
-        #    el gate aplana la reward de contacto a casi cero.
-        contactos_suelo_reward = self._contactos_suelo_reward(foot_contacts)
-        soporte_estatico_reward = self._soporte_estatico_reward(data, foot_contacts)
-        apertura_efectores_xml_reward = self._apertura_efectores_xml_reward(data)
-        q3_distancia_xml_reward = self._q3_distancia_xml_reward(data)
+        #    la compuerta aplana la recompensa de contacto a casi cero.
+        contactos_suelo_reward = self._recompensa_contactos_suelo(foot_contacts)
+        soporte_estatico_reward = self._recompensa_soporte_estatico(data, foot_contacts)
+        apertura_efectores_xml_reward = self._recompensa_apertura_efectores_xml(data)
+        q3_distancia_xml_reward = self._recompensa_distancia_q3_xml(data)
 
         pose_gate = jp.clip((pose_imitacion_reward - 0.20) / 0.50, 0.0, 1.0)
         height_gate = jp.clip((altura_reward - 0.20) / 0.50, 0.0, 1.0)
@@ -1455,11 +1465,11 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
         q3_distancia_xml_reward_filtrada = q3_distancia_xml_reward * geometry_gate
 
-        # 7. LEGACY (q1 centrados, peso bajo, mantenido por compatibilidad).
-        q1_centrados_reward = self._q1_centrados_reward(data)
+        # 7. COMPATIBILIDAD ANTERIOR (q1 centrados y peso bajo).
+        q1_centrados_reward = self._recompensa_q1_centrados(data)
 
         # =================================================================
-        # SUMA PONDERADA DE REWARDS POSITIVAS
+        # SUMA PONDERADA DE RECOMPENSAS POSITIVAS
         # =================================================================
         pose_imitacion_reward_ponderado = (
             float(self._config.pose_imitacion_reward_weight) * pose_imitacion_reward
@@ -1548,7 +1558,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
 
         # =================================================================
-        # PENALIZACIONES escaladas por k_c (curriculum)
+        # PENALIZACIONES escaladas por k_c (currículo)
         # k_c=0.10 -> solo una fraccion al principio, sube manualmente.
         # reward_scale=0.01 puede subirse a 0.05 si la senal es demasiado
         # debil; dejado en 0.01 por compatibilidad con hiper anteriores.
@@ -1606,7 +1616,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             )
             * inclinacion_suave_penalty
         )
-        efector_encima_q3_pen = self._efector_encima_q3_penalty(data)
+        efector_encima_q3_pen = self._penalizacion_efector_sobre_q3(data)
         efector_encima_q3_penalty_ponderado = (
             self._config.efector_encima_q3_penalty_weight * efector_encima_q3_pen
         )
@@ -1660,7 +1670,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
             jp.array(float(self._config.cambio_accion_penalty_weight), dtype=jp.float32)
             * cambio_accion_penalty
         )
-        limite_articular_penalty = self._limite_articular_penalty(data)
+        limite_articular_penalty = self._penalizacion_limite_articular(data)
         limite_articular_penalty_ponderado = (
             self._config.limite_articular_penalty_weight * limite_articular_penalty
         )
@@ -1688,7 +1698,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         penalties = penalties_core + penalties_secundarias
 
         # =================================================================
-        # REWARD FINAL
+        # RECOMPENSA FINAL
         # =================================================================
         terminal_failure_penalty_valor = jp.clip(
             jp.array(float(self._config.terminal_failure_penalty), dtype=jp.float32),
@@ -1713,7 +1723,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
 
         # =================================================================
-        # METRICAS (todas las calculadas quedan registradas)
+        # MÉTRICAS (todas las calculadas quedan registradas)
         # =================================================================
         error_medio_deg = jp.rad2deg(error_rms_rad)
         pose_imitacion_porcentaje = pose_imitacion_reward * 100.0
@@ -1829,7 +1839,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         num_valid_foot_contacts = jp.sum(foot_contacts.astype(jp.float32))
         metrics["state/foot_contacts"] = num_valid_foot_contacts
         metrics["state/num_valid_foot_contacts"] = num_valid_foot_contacts
-        metrics["state/total_foot_clearance"] = self._total_foot_clearance(data)
+        metrics["state/total_foot_clearance"] = self._separacion_total_pies_suelo(data)
         metrics["state/supervivencia_reward"] = supervivencia_reward
         metrics["state/vector_gravedad_reward"] = vector_gravedad_reward
         metrics["state/vector_gravedad_lineal_reward_base"] = (
@@ -1877,10 +1887,10 @@ class TarantulinStandup(mjx_env.MjxEnv):
         metrics["state/g_body_y"] = gravity_body[1]
         metrics["state/g_body_z"] = gravity_body[2]
         metrics["debug/version"] = jp.array(
-            float(DEBUG_REWARD_VERSION), dtype=jp.float32
+            float(VERSION_DIAGNOSTICO_RECOMPENSA), dtype=jp.float32
         )
         metrics["debug/reward_version"] = jp.array(
-            float(DEBUG_REWARD_VERSION), dtype=jp.float32
+            float(VERSION_DIAGNOSTICO_RECOMPENSA), dtype=jp.float32
         )
         metrics["debug/ref_body_z"] = self._ref_body_z
         metrics["debug/episode_length"] = episode_length_steps.astype(jp.float32)
@@ -1900,34 +1910,34 @@ class TarantulinStandup(mjx_env.MjxEnv):
         return reward_scaled, metrics
 
     # =====================================================================
-    # HELPERS: INCLINACION Y CONTACTOS
+    # UTILIDADES: INCLINACIÓN Y CONTACTOS
     # =====================================================================
 
-    def _tilt_degrees(self, data: mjx.Data) -> jax.Array:
+    def _inclinacion_grados(self, data: mjx.Data) -> jax.Array:
         uprightness = jp.clip(data.xmat[self._main_body_id, 2, 2], -1.0, 1.0)
         return jp.rad2deg(jp.arccos(uprightness))
 
-    def _contact_active_mask(self, data: mjx.Data) -> jax.Array:
+    def _mascara_contactos_activos(self, data: mjx.Data) -> jax.Array:
         return data.contact.dist <= 0.0
 
-    def _ground_contact_mask(self, data: mjx.Data) -> jax.Array:
+    def _mascara_contactos_suelo(self, data: mjx.Data) -> jax.Array:
         geom1 = data.contact.geom1
         geom2 = data.contact.geom2
-        return self._contact_active_mask(data) & (
+        return self._mascara_contactos_activos(data) & (
             (geom1 == self._floor_geom_id) | (geom2 == self._floor_geom_id)
         )
 
-    def _foot_ground_contact_mask(self, data: mjx.Data) -> jax.Array:
+    def _mascara_contactos_pies_suelo(self, data: mjx.Data) -> jax.Array:
         geom1 = data.contact.geom1
         geom2 = data.contact.geom2
-        ground_contact = self._ground_contact_mask(data)
+        ground_contact = self._mascara_contactos_suelo(data)
 
-        def has_contact(geom_id: jax.Array) -> jax.Array:
+        def tiene_contacto(geom_id: jax.Array) -> jax.Array:
             return jp.any(ground_contact & ((geom1 == geom_id) | (geom2 == geom_id)))
 
-        return jax.vmap(has_contact)(self._effector_geom_ids)
+        return jax.vmap(tiene_contacto)(self._effector_geom_ids)
 
-    def _invalid_ground_contact_info(
+    def _informacion_contactos_suelo_invalidos(
         self, data: mjx.Data
     ) -> tuple[
         jax.Array, jax.Array, jax.Array, jax.Array,
@@ -1935,7 +1945,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
     ]:
         geom1 = data.contact.geom1
         geom2 = data.contact.geom2
-        ground_contact = self._ground_contact_mask(data)
+        ground_contact = self._mascara_contactos_suelo(data)
         other_geom = jp.where(geom1 == self._floor_geom_id, geom2, geom1)
         ground_geom = jp.where(geom1 == self._floor_geom_id, geom1, geom2)
         is_effector = jp.any(
@@ -1986,57 +1996,57 @@ class TarantulinStandup(mjx_env.MjxEnv):
         )
 
     # =====================================================================
-    # HELPERS: GEOMETRIA DE PIES Y Q3
+    # UTILIDADES: GEOMETRÍA DE PIES Y Q3
     # =====================================================================
 
-    def _foot_bottom_offsets(self, data: mjx.Data) -> jax.Array:
+    def _desfases_inferiores_pies(self, data: mjx.Data) -> jax.Array:
         effector_z = data.geom_xpos[self._effector_geom_ids, 2]
         return effector_z - self._effector_geom_radii - self._floor_z
 
-    def _foot_clearance(self, data: mjx.Data) -> jax.Array:
-        return jp.maximum(0.0, self._foot_bottom_offsets(data))
+    def _separacion_pies_suelo(self, data: mjx.Data) -> jax.Array:
+        return jp.maximum(0.0, self._desfases_inferiores_pies(data))
 
-    def _total_foot_clearance(self, data: mjx.Data) -> jax.Array:
-        return jp.sum(self._foot_clearance(data))
+    def _separacion_total_pies_suelo(self, data: mjx.Data) -> jax.Array:
+        return jp.sum(self._separacion_pies_suelo(data))
 
-    def _effector_q3_z_delta(self, data: mjx.Data) -> jax.Array:
+    def _diferencia_z_efector_q3(self, data: mjx.Data) -> jax.Array:
         effector_z = data.geom_xpos[self._effector_geom_ids, 2]
         q3_z = data.geom_xpos[self._q3_geom_ids, 2]
         return effector_z - q3_z
 
-    def _effector_above_q3_excess(self, data: mjx.Data) -> jax.Array:
+    def _exceso_efector_sobre_q3(self, data: mjx.Data) -> jax.Array:
         return jp.maximum(
             0.0,
-            self._effector_q3_z_delta(data) - self._config.effector_q3_z_margin,
+            self._diferencia_z_efector_q3(data) - self._config.effector_q3_z_margin,
         )
 
-    def _has_effector_above_q3(self, data: mjx.Data) -> jax.Array:
-        return jp.any(self._effector_above_q3_excess(data) > 0.0)
+    def _hay_efector_sobre_q3(self, data: mjx.Data) -> jax.Array:
+        return jp.any(self._exceso_efector_sobre_q3(data) > 0.0)
 
-    def _q3_body_z_margin_mean(self, data: mjx.Data) -> jax.Array:
+    def _margen_medio_z_q3_cuerpo(self, data: mjx.Data) -> jax.Array:
         body_z = data.xpos[self._main_body_id, 2]
         q3_z = data.geom_xpos[self._q3_geom_ids, 2]
         return jp.mean(body_z - q3_z)
 
-    def _q3_above_body_margin_mean(self, data: mjx.Data) -> jax.Array:
+    def _margen_medio_q3_sobre_cuerpo(self, data: mjx.Data) -> jax.Array:
         body_z = data.xpos[self._main_body_id, 2]
         q3_z = data.geom_xpos[self._q3_geom_ids, 2]
         return jp.mean(q3_z - body_z)
 
-    def _q3_radial_distance_mean(self, data: mjx.Data) -> jax.Array:
+    def _distancia_radial_media_q3(self, data: mjx.Data) -> jax.Array:
         body_xy = data.xpos[self._main_body_id, :2]
         q3_xy = data.geom_xpos[self._q3_geom_ids, :2]
         return jp.mean(jp.linalg.norm(q3_xy - body_xy, axis=1))
 
-    def _effector_distance_xy(self, data: mjx.Data) -> jax.Array:
+    def _distancias_xy_efectores(self, data: mjx.Data) -> jax.Array:
         com_xy = data.subtree_com[self._main_body_id, :2]
         effector_xy = data.geom_xpos[self._effector_geom_ids, :2]
         return jp.linalg.norm(effector_xy - com_xy, axis=1)
 
-    def _effector_distance_xy_mean(self, data: mjx.Data) -> jax.Array:
-        return jp.mean(self._effector_distance_xy(data))
+    def _distancia_xy_media_efectores(self, data: mjx.Data) -> jax.Array:
+        return jp.mean(self._distancias_xy_efectores(data))
 
-    def _leg_symmetry_reward(self, data: mjx.Data) -> jax.Array:
+    def _recompensa_simetria_patas(self, data: mjx.Data) -> jax.Array:
         tolerance = jp.deg2rad(self._config.leg_symmetry_tolerance_deg)
         q1_values = data.qpos[self._q1_qpos_adrs]
         q2_values = data.qpos[self._q2_qpos_adrs]
@@ -2045,11 +2055,11 @@ class TarantulinStandup(mjx_env.MjxEnv):
         return jp.maximum(0.0, 1.0 - dispersion / tolerance)
 
     # =====================================================================
-    # SANITY CHECK: verifica que la reward funciona correctamente en qpos0
+    # COMPROBACIÓN RÁPIDA: verifica que la recompensa funciona correctamente en qpos0
     # =====================================================================
 
-    def verifica_reward_referencia(self) -> None:
-        """Imprime valores de reward en la pose de referencia del XML.
+    def verificar_recompensa_referencia(self) -> None:
+        """Imprime valores de recompensa en la pose de referencia del XML.
 
         Llama esto antes de entrenar (fuera del JIT) para verificar que:
           - pose_imitacion_reward ~= 1.0 en qpos0.
@@ -2058,15 +2068,15 @@ class TarantulinStandup(mjx_env.MjxEnv):
           - target_body_z_referencia ~= 0.100 m para TARANTULIN_POSE_IDEAL.
 
         Tambien testea un offset articular de 0.30 rad para verificar que
-        la reward baja correctamente cuando la pose se aleja de la referencia.
+        la recompensa baja correctamente cuando la pose se aleja de la referencia.
         """
         import numpy as np
 
-        def _scalar(x):
+        def _a_escalar(x):
             return float(np.asarray(x))
 
-        ref_body_z = _scalar(self._ref_body_z)
-        target_body_z_actual = _scalar(self._target_body_z_actual)
+        ref_body_z = _a_escalar(self._ref_body_z)
+        target_body_z_actual = _a_escalar(self._target_body_z_actual)
         q_ref = np.asarray(self._q_referencia)
 
         sigma = max(float(self._config.pose_imitacion_sigma), 1e-6)
@@ -2124,7 +2134,7 @@ class TarantulinStandup(mjx_env.MjxEnv):
         geom1 = np.asarray(data_ref.contact.geom1[: data_ref.ncon])
         geom2 = np.asarray(data_ref.contact.geom2[: data_ref.ncon])
         dist = np.asarray(data_ref.contact.dist[: data_ref.ncon])
-        floor_geom_id = int(_scalar(self._floor_geom_id))
+        floor_geom_id = int(_a_escalar(self._floor_geom_id))
         effector_geom_ids = set(np.asarray(self._effector_geom_ids, dtype=int).tolist())
         active_ground_contacts = (
             (dist <= 0.0) & ((geom1 == floor_geom_id) | (geom2 == floor_geom_id))

@@ -1,14 +1,14 @@
 """Fases de entrenamiento de TARANTULIN.
 
 Aqui no entrenamos nada directamente.
-Este archivo solo decide que recompensa, que reset y que castigos se usan en
+Este archivo solo decide qué recompensa, qué reinicio y qué castigos se usan en
 cada fase.
 
 La logica de las 3 fases:
 
 1. Fase 1 – mantener_pose_xml
    El robot empieza muy cerca de la pose ideal del XML y aprende a quedarse
-   ahi. La reward principal es pose_imitacion (imitacion de qpos0 del XML).
+   ahi. La recompensa principal es pose_imitacion (imitacion de qpos0 del XML).
    Contacto y soporte no dominan. Penalizaciones de esfuerzo casi apagadas.
 
 2. Fase 2 – llegar_a_pose_xml_desde_suelo
@@ -22,14 +22,14 @@ La logica de las 3 fases:
    mas fuertes.
 
 REGLA CLAVE: La pose objetivo siempre es qpos0 del XML activo.
-No hay angulos hardcodeados en este archivo. Si cambias el XML, la reward
+No hay angulos fijados a mano en este archivo. Si cambias el XML, la recompensa
 se adapta sola al reconstruir el entorno.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any as Cualquier
+from typing import Any
 
 from ml_collections import config_dict
 
@@ -42,10 +42,10 @@ _XML_POSE_IDEAL = (
 
 
 # Apagamos todo primero, luego cada fase enciende solo lo que interesa.
-# Incluimos los campos nuevos del sistema de reward-xml para que no queden
+# Incluimos los campos nuevos del sistema de recompensa XML para que no queden
 # encendidos accidentalmente si una fase anterior los activo.
 PESOS_RECOMPENSA_APAGADOS: dict[str, float] = {
-    # --- Rewards positivas ---
+    # --- Recompensas positivas ---
     "pose_imitacion_reward_weight": 0.0,
     "pose_xml_final_reward_weight": 0.0,
     "supervivencia_reward_weight": 0.0,
@@ -63,7 +63,7 @@ PESOS_RECOMPENSA_APAGADOS: dict[str, float] = {
     "velocidad_lineal_cero_reward_weight": 0.0,
     "velocidad_angular_cero_reward_weight": 0.0,
     "velocidad_articular_cero_reward_weight": 0.0,
-    # --- Legacy con peso 0: mantenidas por compatibilidad con scripts externos ---
+    # --- Campos antiguos con peso 0, mantenidos por compatibilidad externa ---
     "pose_articular_reward_weight": 0.0,
     "q1_centrados_reward_weight": 0.0,
     "q3_separados_centro_reward_weight": 0.0,
@@ -83,14 +83,14 @@ PESOS_RECOMPENSA_APAGADOS: dict[str, float] = {
     "control_penalty_weight": 0.0,
     "cambio_accion_penalty_weight": 0.0,
     "limite_articular_penalty_weight": 0.0,
-    # --- Curriculum de penalizaciones ---
+    # --- Currículo de penalizaciones ---
     "curriculum_penalizaciones": 0.0,
 }
 
 
-FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
+FASES_RECOMPENSA: dict[int, dict[str, Any]] = {
     # ------------------------------------------------------------------
-    # FASE 0: configuracion base sin curriculo. Util para debugging y
+    # FASE 0: configuración base sin currículo. Útil para depuración y
     # para compatibilidad con scripts que esperan fase 0.
     # ------------------------------------------------------------------
     0: {
@@ -103,7 +103,7 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
     # FASE 1: aprender a MANTENER la pose ideal del XML.
     #
     # El robot empieza muy cerca de qpos0. El objetivo es quedarse ahi.
-    # La reward de pose es la senal dominante. Contacto y soporte tienen
+    # La recompensa de postura es la señal dominante. Contacto y soporte tienen
     # peso bajo. Penalizaciones de esfuerzo casi apagadas para no
     # incentivar inmovilismo.
     # ------------------------------------------------------------------
@@ -111,7 +111,7 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
         "nombre": "fase_1_mantener_pose_xml",
         "descripcion": (
             "El robot empieza cerca de qpos0 del XML ideal y aprende a "
-            "mantener exactamente esa pose. Reward principal: imitacion de "
+            "mantener exactamente esa pose. Recompensa principal: imitacion de "
             "pose XML. Contacto y soporte no dominan. Penalizaciones de "
             "esfuerzo casi apagadas."
         ),
@@ -128,7 +128,7 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
             "include_pose_error": True,
             "usar_filtros_contacto_recompensa": True,
 
-            # Reset: muy cerca de qpos0 del XML.
+            # Reinicio: muy cerca de qpos0 del XML.
             "reset_pose_mode": "default",
             "reset_randomize_state": True,
             "reset_use_joint_base_pose": False,
@@ -146,7 +146,7 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
             "reset_episode_length_jitter_steps": 0,
             "reset_grace_step_jitter_steps": 0,
 
-            # Terminacion.
+            # Terminación.
             "healthy_z_min": 0.03,
             "healthy_z_max": 0.35,
             "critical_z_min": 0.015,
@@ -158,11 +158,11 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
             "terminal_failure_penalty": 2.0,
             "clipear_reward_minimo": True,
 
-            # Curriculum de penalizaciones: arranca bajo para no bloquear
+            # Currículo de penalizaciones: arranca bajo para no bloquear
             # exploracion inicial.
             "curriculum_penalizaciones": 0.20,
 
-            # === REWARDS ===
+            # === RECOMPENSAS ===
             # Pose: senal dominante.
             "pose_imitacion_reward_weight": 4.7,
             "pose_imitacion_sigma": 0.45,
@@ -204,7 +204,7 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
             "velocidad_articular_cero_reward_weight": 0.18,
             "velocidad_articular_cero_sigma": 2.0,
 
-            # Contacto: muy bajo; el gate de pose ya lo filtra.
+            # Contacto: muy bajo; la compuerta de postura ya lo filtra.
             "contactos_suelo_reward_weight": 0.15,
             "soporte_estatico_reward_weight": 0.0,
             "min_foot_contacts_for_support": 4,
@@ -257,9 +257,9 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
             "include_pose_error": True,
             "usar_filtros_contacto_recompensa": True,
 
-            # Reset: empieza en el suelo, variado.
+            # Reinicio: empieza en el suelo, variado.
             # reset_use_joint_base_pose=True solo para crear estados iniciales
-            # tumbados; el OBJETIVO de la reward sigue siendo qpos0 del XML.
+            # tumbados; el OBJETIVO de la recompensa sigue siendo qpos0 del XML.
             "reset_pose_mode": "suelo_variado",
             "reset_randomize_state": True,
             "reset_use_joint_base_pose": True,
@@ -281,7 +281,7 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
             "reset_episode_length_jitter_steps": 100,
             "reset_grace_step_jitter_steps": 30,
 
-            # Terminacion.
+            # Terminación.
             "healthy_z_min": 0.015,
             "healthy_z_max": 0.45,
             "critical_z_min": 0.005,
@@ -295,7 +295,7 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
 
             "curriculum_penalizaciones": 0.45,
 
-            # === REWARDS ===
+            # === RECOMPENSAS ===
             "pose_imitacion_reward_weight": 4.7,
             "pose_imitacion_sigma": 0.30,
             "pose_xml_final_reward_weight": 2.4,
@@ -382,7 +382,7 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
             "include_pose_error": True,
             "usar_filtros_contacto_recompensa": True,
 
-            # Reset: caida variada desde posiciones extremas.
+            # Reinicio: caída variada desde posiciones extremas.
             "reset_pose_mode": "caida_variada",
             "reset_randomize_state": True,
             "reset_use_joint_base_pose": False,
@@ -400,7 +400,7 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
             "reset_episode_length_jitter_steps": 200,
             "reset_grace_step_jitter_steps": 50,
 
-            # Terminacion.
+            # Terminación.
             "healthy_z_min": 0.010,
             "healthy_z_max": 0.60,
             "critical_z_min": 0.003,
@@ -414,7 +414,7 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
 
             "curriculum_penalizaciones": 0.80,
 
-            # === REWARDS ===
+            # === RECOMPENSAS ===
             # Sigma mas estricto: exige parecido real a la pose XML.
             "pose_imitacion_reward_weight": 5.3,
             "pose_imitacion_sigma": 0.18,
@@ -476,10 +476,10 @@ FASES_RECOMPENSA: dict[int, dict[str, Cualquier]] = {
 }
 
 
-def aplicar_fase_curriculum_recompensa(
+def aplicar_fase_curriculo_recompensa(
     configuracion_entorno: config_dict.ConfigDict,
     fase: int,
-) -> dict[str, Cualquier]:
+) -> dict[str, Any]:
     """Mete en el entorno los pesos y resets de la fase elegida."""
 
     if fase not in FASES_RECOMPENSA:
@@ -494,7 +494,7 @@ def aplicar_fase_curriculum_recompensa(
     return preparar_resumen_fase_recompensa(fase)
 
 
-def preparar_resumen_fase_recompensa(fase: int) -> dict[str, Cualquier]:
+def preparar_resumen_fase_recompensa(fase: int) -> dict[str, Any]:
     """Prepara el JSON que se guarda dentro de la carpeta del entrenamiento."""
 
     if fase not in FASES_RECOMPENSA:

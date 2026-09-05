@@ -4,4 +4,4 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}/.."
 
-exec ./scripts/tarantulin_wsl.sh view-results "$@"
+exec ./scripts/tarantulin.sh visualizar-resultados "$@"
