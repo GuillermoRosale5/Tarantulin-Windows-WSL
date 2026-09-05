@@ -5,12 +5,24 @@ SOURCE_ROOT="${1:?uso: test_sync_runtime.sh SOURCE_ROOT SOURCE_ID}"
 SOURCE_ID="${2:?uso: test_sync_runtime.sh SOURCE_ROOT SOURCE_ID}"
 BASE="${HOME}/.local/share/tarantulin-windows"
 mkdir -p "${BASE}"
+FAKE_WSL_BIN=""
+if [[ "${TARANTULIN_TEST_GENERIC_LINUX:-0}" == "1" ]] ||
+   { [[ -z "${WSL_INTEROP:-}" ]] && ! grep -qi microsoft /proc/version 2>/dev/null; }; then
+  # GitHub Actions usa Ubuntu nativo. Simulamos solo las dos señales externas
+  # que valida el sincronizador: estar en WSL y leer una fuente drvfs.
+  FAKE_WSL_BIN="$(mktemp -d -p "${BASE}" codex-fake-wsl.XXXXXX)"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "drvfs\\n"' > "${FAKE_WSL_BIN}/findmnt"
+  chmod +x "${FAKE_WSL_BIN}/findmnt"
+  export PATH="${FAKE_WSL_BIN}:${PATH}"
+  export WSL_INTEROP="/tmp/tarantulin-ci-wsl-interop"
+fi
 TEST_RUNTIME="$(mktemp -d -p "${BASE}" codex-sync-test.XXXXXX)"
 MARKERLESS="$(mktemp -d -p "${BASE}" codex-markerless-test.XXXXXX)"
 
 cleanup() {
   case "${TEST_RUNTIME}" in "${BASE}"/codex-sync-test.*) rm -rf -- "${TEST_RUNTIME}" ;; esac
   case "${MARKERLESS}" in "${BASE}"/codex-markerless-test.*) rm -rf -- "${MARKERLESS}" ;; esac
+  case "${FAKE_WSL_BIN}" in "${BASE}"/codex-fake-wsl.*) rm -rf -- "${FAKE_WSL_BIN}" ;; esac
 }
 trap cleanup EXIT
 
@@ -56,11 +68,7 @@ if bash "${SOURCE_ROOT}/scripts/wsl/sync_runtime.sh" \
   exit 1
 fi
 
-# Este bloque comprueba la coordinación del runtime, no el kernel de WSL.
-# En GitHub Actions simulamos únicamente la señal WSL_INTEROP; las pruebas
-# reales Windows->WSL se ejecutan además sobre el equipo del proyecto.
-WSL_INTEROP="${WSL_INTEROP:-/tmp/tarantulin-ci-wsl-interop}" \
-  bash "${SOURCE_ROOT}/scripts/wsl/bootstrap_runtime.sh" \
+bash "${SOURCE_ROOT}/scripts/wsl/bootstrap_runtime.sh" \
   --source "${SOURCE_ROOT}" --runtime "${TEST_RUNTIME}" --source-id "${SOURCE_ID}" \
   --accelerator cpu --no-setup --skip-system-packages >/dev/null
 test "$(cat "${TEST_RUNTIME}/accelerator.profile")" = cpu
