@@ -48,7 +48,7 @@ if (( INSTALL_SYSTEM_PACKAGES == 1 )); then
     pkg-config libgl1 libegl1 libglfw3 libglew2.2 pciutils
 fi
 
-"${SCRIPT_DIR}/sync_runtime.sh" \
+bash "${SCRIPT_DIR}/sync_runtime.sh" \
   --source "${SOURCE_ROOT}" \
   --runtime "${RUNTIME_REQUESTED}" \
   --source-id "${SOURCE_ID}"
@@ -85,6 +85,6 @@ fi
 install_args=(--skip-system-packages --accelerator "${resolved_accelerator}")
 if (( SKIP_GPU_CHECK == 1 )); then install_args+=(--skip-gpu-check); fi
 if (( ENABLE_EXPERIMENTAL_AMD_WSL == 1 )); then install_args+=(--enable-experimental-amd-wsl); fi
-"${workspace}/scripts/install_wsl.sh" "${install_args[@]}"
+bash "${workspace}/scripts/install_wsl.sh" "${install_args[@]}"
 
 echo "Runtime preparado en: ${workspace}"
