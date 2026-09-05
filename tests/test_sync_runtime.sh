@@ -56,7 +56,11 @@ if bash "${SOURCE_ROOT}/scripts/wsl/sync_runtime.sh" \
   exit 1
 fi
 
-bash "${SOURCE_ROOT}/scripts/wsl/bootstrap_runtime.sh" \
+# Este bloque comprueba la coordinación del runtime, no el kernel de WSL.
+# En GitHub Actions simulamos únicamente la señal WSL_INTEROP; las pruebas
+# reales Windows->WSL se ejecutan además sobre el equipo del proyecto.
+WSL_INTEROP="${WSL_INTEROP:-/tmp/tarantulin-ci-wsl-interop}" \
+  bash "${SOURCE_ROOT}/scripts/wsl/bootstrap_runtime.sh" \
   --source "${SOURCE_ROOT}" --runtime "${TEST_RUNTIME}" --source-id "${SOURCE_ID}" \
   --accelerator cpu --no-setup --skip-system-packages >/dev/null
 test "$(cat "${TEST_RUNTIME}/accelerator.profile")" = cpu
