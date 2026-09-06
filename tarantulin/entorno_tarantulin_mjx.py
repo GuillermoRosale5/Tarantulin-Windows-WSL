@@ -307,9 +307,11 @@ class TarantulinIncorporarse(mjx_env.MjxEnv):
 
     def __init__(
         self,
-        config: config_dict.ConfigDict = default_config(),
+        config: config_dict.ConfigDict | None = None,
         config_overrides: dict[str, Any] | None = None,
     ):
+        if config is None:
+            config = default_config()
         super().__init__(config, config_overrides=config_overrides)
 
         xml_path = Path(str(self._config.xml_path))
@@ -2141,7 +2143,9 @@ class TarantulinIncorporarse(mjx_env.MjxEnv):
         )
         num_valid_foot_contacts = 0
         num_invalid_contacts = 0
-        for g1, g2, active in zip(geom1, geom2, active_ground_contacts):
+        for g1, g2, active in zip(
+            geom1, geom2, active_ground_contacts, strict=True
+        ):
             if not active:
                 continue
             other_geom = int(g2 if int(g1) == floor_geom_id else g1)

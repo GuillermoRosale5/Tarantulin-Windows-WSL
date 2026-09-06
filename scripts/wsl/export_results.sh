@@ -49,8 +49,20 @@ if [[ -L "${SOURCE_ROOT}/artifacts" || -L "${destination}" ]]; then
 fi
 mkdir -p "${destination}"
 
+command -v flock >/dev/null 2>&1 || {
+  echo "Falta flock (paquete util-linux). Repite la instalacion completa desde Windows." >&2
+  exit 1
+}
+rsync_args=(-a --human-readable --info=stats2 --safe-links)
+exec {TRAINING_LOCK_FD}> "${RUNTIME_ROOT}/training.lock"
+if ! flock --exclusive --nonblock "${TRAINING_LOCK_FD}"; then
+  rsync_args+=(--exclude='checkpoints/***' --exclude='*/checkpoints/***')
+  echo "Aviso: hay un entrenamiento activo. Se exportan registros y metricas, pero no checkpoints que podrian estar escribiendose." >&2
+  echo "Para copiar tambien los checkpoints, deten el entrenamiento o espera a que termine y repite." >&2
+fi
+
 if (( EXPORT_ALL == 1 )); then
-  rsync -a --human-readable --info=stats2 "${logs}/" "${destination}/"
+  rsync "${rsync_args[@]}" "${logs}/" "${destination}/"
   echo "Todos los resultados se copiaron a: ${destination}"
   exit 0
 fi
@@ -65,5 +77,5 @@ if [[ -z "${run_dir}" ]]; then
 fi
 [[ -n "${run_dir}" ]] || { echo "No se encontro ninguna ejecucion para exportar." >&2; exit 1; }
 case "${run_dir}" in "${logs}/"*) ;; *) echo "Ruta de resultados rechazada: ${run_dir}" >&2; exit 1 ;; esac
-rsync -a --human-readable --info=stats2 "${run_dir}/" "${destination}/$(basename "${run_dir}")/"
+rsync "${rsync_args[@]}" "${run_dir}/" "${destination}/$(basename "${run_dir}")/"
 echo "Ultimo resultado copiado a: ${destination}/$(basename "${run_dir}")"

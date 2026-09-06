@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import csv
 import datetime as dt
 import functools
@@ -13,7 +14,9 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import sys
+import tempfile
 import time
 import traceback
 from typing import Any
@@ -329,6 +332,8 @@ MAPA_METRICAS_RECOMPENSA = {
     "vector_gravedad_reward_ponderado": ("vector_gravedad_reward_ponderado",),
     "vector_gravedad_estabilidad_reward_ponderado": (
         "vector_gravedad_estabilidad_reward_ponderado",
+        "eval/episode_vector_gravedad_estabilidad_reward_ponderado",
+        "episode/vector_gravedad_estabilidad_reward_ponderado",
     ),
     "poligono_CoG_reward_ponderado": ("poligono_CoG_reward_ponderado",),
     "altura_reward_ponderado": ("altura_reward_ponderado",),
@@ -897,10 +902,6 @@ MAPA_METRICAS_RECOMPENSA = {
         "eval/episode_cuerpo_paralelo_reward_ponderado",
         "episode/cuerpo_paralelo_reward_ponderado",
     ),
-    "vector_gravedad_estabilidad_reward_ponderado": (
-        "eval/episode_vector_gravedad_estabilidad_reward_ponderado",
-        "episode/vector_gravedad_estabilidad_reward_ponderado",
-    ),
     "apertura_efectores_xml_reward_ponderado": (
         "eval/episode_apertura_efectores_xml_reward_ponderado",
         "episode/apertura_efectores_xml_reward_ponderado",
@@ -1430,7 +1431,22 @@ def _ultimo_checkpoint(run_dir: Path) -> Path | None:
 
 
 def _guardar_json(path: Path, data) -> None:
-  path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+  if path.is_symlink():
+    raise ValueError(f"No se escribe JSON sobre un enlace simbolico: {path}")
+  path.parent.mkdir(parents=True, exist_ok=True)
+  descriptor, temporary_name = tempfile.mkstemp(
+      prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+  )
+  temporary_path = Path(temporary_name)
+  try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as temporary_file:
+      json.dump(data, temporary_file, indent=2, sort_keys=True)
+      temporary_file.write("\n")
+      temporary_file.flush()
+      os.fsync(temporary_file.fileno())
+    os.replace(temporary_path, path)
+  finally:
+    temporary_path.unlink(missing_ok=True)
 
 
 def _guardar_comando(path: Path) -> None:
@@ -1454,14 +1470,76 @@ def _guardar_comando(path: Path) -> None:
 
 
 def _guardar_estado(path: Path, estado: str, extra: dict | None = None) -> None:
-  payload = {
+  payload: dict[str, Any] = {}
+  if path.is_file() and not path.is_symlink():
+    try:
+      previous = json.loads(path.read_text(encoding="utf-8"))
+      if isinstance(previous, dict):
+        payload.update(previous)
+    except (OSError, ValueError, TypeError):
+      pass
+  if estado == "iniciando":
+    for stale_key in (
+        "error",
+        "traceback",
+        "senal",
+        "motivo_cancelacion",
+        "codigo_salida",
+    ):
+      payload.pop(stale_key, None)
+  payload.update({
       "estado": estado,
-      "pid": os.getpid(),
+      "pid": (
+          os.getpid()
+          if estado not in {"terminado", "error", "cancelado"}
+          else None
+      ),
       "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
-  }
+  })
   if extra:
     payload.update(extra)
   _guardar_json(path, payload)
+
+
+class EntrenamientoCancelado(BaseException):
+  """Interrumpe PPO de forma distinguible de un fallo del entrenamiento."""
+
+  def __init__(self, motivo: str, signal_number: int | None = None):
+    super().__init__(motivo)
+    self.motivo = motivo
+    self.signal_number = signal_number
+
+
+def _parada_solicitada(run_dir: Path) -> bool:
+  return any(
+      (run_dir / name).exists()
+      for name in ("parada_entrenamiento_solicitada", "parada_total_solicitada")
+  )
+
+
+def _informacion_checkpoint_conservado(
+    run_dir: Path, ultimo_paso_confirmado: int | None
+) -> dict[str, Any]:
+  checkpoint = _ultimo_checkpoint(run_dir)
+  if checkpoint is None:
+    return {
+        "ultimo_checkpoint_conservado": None,
+        "paso_checkpoint_conservado": None,
+        "checkpoint_final_seguro": False,
+    }
+  try:
+    checkpoint_step = int(checkpoint.name)
+  except ValueError:
+    checkpoint_step = None
+  return {
+      "ultimo_checkpoint_conservado": checkpoint.as_posix(),
+      "paso_checkpoint_conservado": checkpoint_step,
+      "checkpoint_final_seguro": (
+          checkpoint_step is not None
+          and ultimo_paso_confirmado is not None
+          and checkpoint_step == ultimo_paso_confirmado
+      ),
+  }
 
 
 def _metric_value(
@@ -1788,8 +1866,134 @@ def main() -> None:
 
     estado_path = run_dir / "estado.json"
     _guardar_identidad_proceso(run_dir)
-    _guardar_estado(estado_path, "iniciando")
+    estado_terminal = {"escrito": False}
+    progreso_confirmado: dict[str, int | None] = {"pasos": None}
+    previous_excepthook = sys.excepthook
+
+    def limpiar_identidad_propia() -> None:
+        pid_path = run_dir / "entrenamiento.pid"
+        starttime_path = run_dir / "entrenamiento.starttime"
+        try:
+            if pid_path.is_file() and not pid_path.is_symlink():
+                if pid_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+                    pid_path.unlink()
+                    if starttime_path.is_file() and not starttime_path.is_symlink():
+                        starttime_path.unlink()
+        except OSError:
+            pass
+        launcher_pid_path = run_dir / "lanzador.pid"
+        launcher_starttime_path = run_dir / "lanzador.starttime"
+        try:
+            if launcher_pid_path.is_file() and not launcher_pid_path.is_symlink():
+                if launcher_pid_path.read_text(encoding="utf-8").strip() == str(
+                    os.getppid()
+                ):
+                    launcher_pid_path.unlink()
+                    if (
+                        launcher_starttime_path.is_file()
+                        and not launcher_starttime_path.is_symlink()
+                    ):
+                        launcher_starttime_path.unlink()
+        except OSError:
+            pass
+
+    def datos_cancelacion(
+        motivo: str, signal_number: int | None = None
+    ) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "motivo_cancelacion": motivo,
+            "ultimo_paso_confirmado": progreso_confirmado["pasos"],
+        }
+        if signal_number is not None:
+            data["senal"] = signal.Signals(signal_number).name
+            data["codigo_salida"] = 128 + signal_number
+        data.update(
+            _informacion_checkpoint_conservado(
+                run_dir, progreso_confirmado["pasos"]
+            )
+        )
+        return data
+
+    def manejador_senal(signal_number, _frame) -> None:
+        signal_name = signal.Signals(signal_number).name
+        motivo = f"cancelacion solicitada mediante {signal_name}"
+        _guardar_estado(
+            estado_path,
+            "cancelando",
+            datos_cancelacion(motivo, signal_number),
+        )
+        raise EntrenamientoCancelado(motivo, signal_number)
+
+    def manejador_excepcion(exc_type, exc_value, exc_traceback) -> None:
+        if not estado_terminal["escrito"]:
+            if issubclass(exc_type, (EntrenamientoCancelado, KeyboardInterrupt)):
+                motivo = getattr(exc_value, "motivo", "interrupcion de teclado")
+                signal_number = getattr(exc_value, "signal_number", None)
+                _guardar_estado(
+                    estado_path,
+                    "cancelado",
+                    datos_cancelacion(motivo, signal_number),
+                )
+                estado_terminal["escrito"] = True
+            else:
+                _guardar_estado(
+                    estado_path,
+                    "error",
+                    {
+                        "error": repr(exc_value),
+                        "traceback": "".join(
+                            traceback.format_exception(
+                                exc_type, exc_value, exc_traceback, limit=12
+                            )
+                        ),
+                        "ultimo_paso_confirmado": progreso_confirmado["pasos"],
+                        **_informacion_checkpoint_conservado(
+                            run_dir, progreso_confirmado["pasos"]
+                        ),
+                    },
+                )
+                estado_terminal["escrito"] = True
+        limpiar_identidad_propia()
+        if not issubclass(exc_type, (EntrenamientoCancelado, KeyboardInterrupt)):
+            previous_excepthook(exc_type, exc_value, exc_traceback)
+
+    def finalizar_proceso() -> None:
+        if not estado_terminal["escrito"]:
+            _guardar_estado(
+                estado_path,
+                "error",
+                {
+                    "error": "finalizacion inesperada sin estado terminal",
+                    "ultimo_paso_confirmado": progreso_confirmado["pasos"],
+                    **_informacion_checkpoint_conservado(
+                        run_dir, progreso_confirmado["pasos"]
+                    ),
+                },
+            )
+            estado_terminal["escrito"] = True
+        limpiar_identidad_propia()
+
+    _guardar_estado(
+        estado_path,
+        "iniciando",
+        {
+            "run_dir": run_dir.as_posix(),
+            "perfil_ppo": args.perfil_ppo,
+            "fase_curriculum_recompensa": int(args.fase_recompensa),
+        },
+    )
+    atexit.register(finalizar_proceso)
+    sys.excepthook = manejador_excepcion
+    for signal_number in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signal_number, manejador_senal)
+    if signal.getsignal(signal.SIGHUP) != signal.SIG_IGN:
+        signal.signal(signal.SIGHUP, manejador_senal)
     _guardar_comando(run_dir / "comando.sh")
+
+    if _parada_solicitada(run_dir):
+        raise EntrenamientoCancelado(
+            "la parada fue solicitada durante el arranque del entrenamiento"
+        )
 
     env_config = default_config()
     resumen_curriculum = aplicar_fase_curriculo_recompensa(
@@ -1968,6 +2172,10 @@ def main() -> None:
     try:
 
         def progreso(num_steps, metrics):
+            if _parada_solicitada(run_dir):
+                raise EntrenamientoCancelado(
+                    "parada solicitada en un punto seguro entre evaluaciones"
+                )
             elapsed = time.monotonic() - start
             elapsed_hours = elapsed / 3600.0
             eval_episode_reward = metrics.get(
@@ -2132,6 +2340,15 @@ def main() -> None:
             progress_file.flush()
             archivo_recompensas.flush()
             physical_file.flush()
+            progreso_confirmado["pasos"] = int(num_steps)
+            _guardar_estado(
+                estado_path,
+                "entrenando",
+                {
+                    "ultimo_paso_confirmado": int(num_steps),
+                    **_informacion_checkpoint_conservado(run_dir, int(num_steps)),
+                },
+            )
             if eval_episode_reward is not None:
                 print(
                     f"{num_steps}/{ppo_config.num_timesteps} ({percent:.1f}%): "
@@ -2139,8 +2356,19 @@ def main() -> None:
                     flush=True,
                 )
 
+        cancelacion: EntrenamientoCancelado | KeyboardInterrupt | None = None
         try:
             train_fn(environment=env, progress_fn=progreso, eval_env=eval_env)
+        except (EntrenamientoCancelado, KeyboardInterrupt) as exc:
+            cancelacion = exc
+            motivo = getattr(exc, "motivo", "interrupcion de teclado")
+            signal_number = getattr(exc, "signal_number", None)
+            _guardar_estado(
+                estado_path,
+                "cancelado",
+                datos_cancelacion(motivo, signal_number),
+            )
+            estado_terminal["escrito"] = True
         except BaseException as exc:
             _guardar_estado(
                 estado_path,
@@ -2148,15 +2376,36 @@ def main() -> None:
                 {
                     "error": repr(exc),
                     "traceback": traceback.format_exc(limit=12),
+                    "ultimo_paso_confirmado": progreso_confirmado["pasos"],
+                    **_informacion_checkpoint_conservado(
+                        run_dir, progreso_confirmado["pasos"]
+                    ),
                 },
             )
+            estado_terminal["escrito"] = True
             raise
     finally:
         progress_file.close()
         archivo_recompensas.close()
         physical_file.close()
 
-    _guardar_estado(estado_path, "terminado")
+    if cancelacion is not None:
+        limpiar_identidad_propia()
+        print(f"Entrenamiento cancelado: {run_dir}", flush=True)
+        raise SystemExit(130)
+
+    _guardar_estado(
+        estado_path,
+        "terminado",
+        {
+            "ultimo_paso_confirmado": progreso_confirmado["pasos"],
+            **_informacion_checkpoint_conservado(
+                run_dir, progreso_confirmado["pasos"]
+            ),
+        },
+    )
+    estado_terminal["escrito"] = True
+    limpiar_identidad_propia()
     print("Entrenamiento terminado:", run_dir)
 
 

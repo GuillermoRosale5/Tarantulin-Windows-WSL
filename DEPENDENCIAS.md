@@ -50,8 +50,8 @@ nueva pueda reproducir exactamente la misma simulación.
 | `auto` | Recomendado | Elige NVIDIA si `nvidia-smi` funciona; en otro caso CPU. |
 | `nvidia` | Soportado | Instala el extra CUDA 12 de JAX fijado por este repositorio y exige backend JAX GPU. |
 | `cpu` | Soportado | Instala JAX CPU. Sirve para desarrollo y pruebas; no para simulacion masiva. |
-| `amd` | No habilitado/validado en WSL | Se rechaza salvo consentimiento `-EnableExperimentalAmdWsl`; requiere ROCm compatible instalado previamente. |
-| `intel` | No soportado en WSL | Se rechaza y recomienda CPU o Linux nativo experimental. |
+| `amd` | No soportado en WSL2 | Se rechaza con un diagnóstico claro; en este sistema se utiliza `cpu`. |
+| `intel` | No soportado en WSL | Se rechaza y se recomienda el perfil CPU. |
 
 El proyecto ejecuta únicamente `--impl jax`. `warp-lang==1.11.0` permanece
 fijado como dependencia heredada del proyecto, pero la ruta `--impl warp` se

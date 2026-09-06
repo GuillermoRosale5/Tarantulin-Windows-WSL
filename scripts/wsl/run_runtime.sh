@@ -10,7 +10,6 @@ RUNTIME_REQUESTED=""
 SOURCE_ID=""
 ACCELERATOR="auto"
 SKIP_GPU_CHECK=0
-ENABLE_EXPERIMENTAL_AMD_WSL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -19,7 +18,6 @@ while [[ $# -gt 0 ]]; do
     --source-id) SOURCE_ID="$2"; shift 2 ;;
     --accelerator) ACCELERATOR="$2"; shift 2 ;;
     --skip-gpu-check) SKIP_GPU_CHECK=1; shift ;;
-    --enable-experimental-amd-wsl) ENABLE_EXPERIMENTAL_AMD_WSL=1; shift ;;
     --) shift; break ;;
     *) echo "Argumento interno no reconocido: $1" >&2; exit 2 ;;
   esac
@@ -46,24 +44,43 @@ if [[ "${ACCELERATOR}" == "auto" && -f "${RUNTIME_ROOT}/accelerator.profile" ]];
 fi
 export TARANTULIN_BACKEND_PROFILE="${ACCELERATOR}"
 if (( SKIP_GPU_CHECK == 1 )); then export TARANTULIN_SKIP_BACKEND_CHECK=1; fi
-if (( ENABLE_EXPERIMENTAL_AMD_WSL == 1 )); then export TARANTULIN_ENABLE_EXPERIMENTAL_AMD_WSL=1; fi
-if [[ "${ACCELERATOR}" == "amd" && -f "${RUNTIME_ROOT}/amd-wsl-experimental.opt-in" ]] && \
-   grep -qx 'accepted=amd-wsl-experimental-v1' "${RUNTIME_ROOT}/amd-wsl-experimental.opt-in"; then
-  export TARANTULIN_ENABLE_EXPERIMENTAL_AMD_WSL=1
-fi
-
+export TARANTULIN_RUNTIME_ROOT="${RUNTIME_ROOT}"
+command -v flock >/dev/null 2>&1 || {
+  echo "Falta flock (paquete util-linux). Repite la instalacion completa desde Windows." >&2
+  exit 1
+}
 command="$1"
 shift
 case "${command}" in
+  setup)
+    exec {RUNTIME_LOCK_FD}> "${RUNTIME_ROOT}/runtime.lock"
+    if ! flock --exclusive --nonblock "${RUNTIME_LOCK_FD}"; then
+      echo "El runtime esta en uso; deten el entrenamiento o visor y cierra su terminal antes de ejecutar setup." >&2
+      exit 1
+    fi
+    export TARANTULIN_RUNTIME_LOCK_HELD=exclusive
+    cd "${WORKSPACE}"
+    exec "${WORKSPACE}/scripts/tarantulin.sh" setup "$@"
+    ;;
   doctor)
-    exec "${WORKSPACE}/scripts/doctor.sh" "$@"
+    exec flock --shared "${RUNTIME_ROOT}/runtime.lock" env \
+      TARANTULIN_RUNTIME_ROOT="${RUNTIME_ROOT}" \
+      TARANTULIN_RUNTIME_LOCK_HELD=shared \
+      "${WORKSPACE}/scripts/doctor.sh" "$@"
     ;;
   pull-results)
     exec "${WORKSPACE}/scripts/wsl/export_results.sh" \
       --source "${SOURCE_ROOT}" --runtime "${RUNTIME_ROOT}" --source-id "${SOURCE_ID}" "$@"
     ;;
-  *)
+  monitorizar|parar)
     cd "${WORKSPACE}"
     exec "${WORKSPACE}/scripts/tarantulin.sh" "${command}" "$@"
+    ;;
+  *)
+    cd "${WORKSPACE}"
+    exec flock --shared "${RUNTIME_ROOT}/runtime.lock" env \
+      TARANTULIN_RUNTIME_ROOT="${RUNTIME_ROOT}" \
+      TARANTULIN_RUNTIME_LOCK_HELD=shared \
+      "${WORKSPACE}/scripts/tarantulin.sh" "${command}" "$@"
     ;;
 esac

@@ -105,6 +105,7 @@ ACTUAL_PRIMARY_SHARD_SHA256="$(sha256sum "${MODEL_DIR}/${PRIMARY_SHARD_REL}" | a
 
 python3 - "${MODEL_DIR}" <<'PY'
 import json
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -146,6 +147,16 @@ expect(model.get("target_training_steps"), 100000000, "objetivo de entrenamiento
 expect(model.get("eval_episode_reward"), 158.104767, "recompensa de evaluacion")
 expect(model.get("checkpoint_relative_path"), "checkpoints/000045932544", "ruta del checkpoint")
 expect(model.get("xml_relative_path"), expected_xml, "XML del modelo")
+
+repo = root.parents[1]
+for metadata_key, source_relative in (
+    ("environment_source_sha256", "tarantulin/entorno_tarantulin_mjx.py"),
+    ("hyperparameters_source_sha256", "tarantulin/hiperparametros.py"),
+    ("xml_sha256", expected_xml),
+):
+    source_path = repo / source_relative
+    digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    expect(model.get(metadata_key), digest, f"hash de {source_relative}")
 
 expect(environment.get("fase_curriculum_recompensa"), 2, "fase del entorno")
 expect(environment.get("episode_length"), 1500, "duracion de episodio del entorno")

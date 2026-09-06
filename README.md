@@ -12,7 +12,7 @@ dentro de Ubuntu.
 > No hace falta instalar los dos repositorios de TARANTULIN. Elige este si
 > quieres guardar y editar el código en Windows. Si quieres que todo viva
 > directamente en Ubuntu, usa
-> [Tarantulin-Linux-WSL](https://github.com/GuillermoRosale5/Tarantulin-Linux-WSL).
+> [Sim2Real MJX-JAX sobre Linux/WSL](https://github.com/GuillermoRosale5/Sim2Real-MJX-JAX-sobre-Linux-WSL).
 
 ## Organización de las dos versiones
 
@@ -23,23 +23,30 @@ dentro de Ubuntu.
 
 ## Puesta en marcha rápida
 
-Abrimos PowerShell en una carpeta Windows vacía y ejecutamos el instalador:
+Este repositorio es privado. Primero iniciamos sesión en GitHub, descargamos el
+ZIP, lo extraemos en una carpeta corta de Windows —por ejemplo
+`C:\Sim2Real-Windows`— y hacemos doble clic en:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/GuillermoRosale5/Tarantulin-Windows-WSL/main/scripts/bootstrap_windows.ps1' | iex"
+```text
+INSTALAR_WINDOWS.cmd
 ```
+
+No hay que instalar antes Git, Python, MuJoCo, JAX ni Ubuntu. Windows puede
+pedir una confirmación de administrador para WSL y Ubuntu pedirá una vez el
+nombre y la contraseña del usuario Linux. Si Windows obliga a reiniciar,
+volvemos a ejecutar el mismo archivo después del reinicio.
 
 Cuando termine, comprobamos el sistema:
 
 ```powershell
-.\tarantulin.ps1 doctor
-.\tarantulin.ps1 test-mjx -- --steps 10
+.\TARANTULIN.cmd doctor
+.\TARANTULIN.cmd test-mjx -- --steps 10
 ```
 
 Y podemos abrir directamente la red que dejamos preparada en el repositorio:
 
 ```powershell
-.\tarantulin.ps1 visualizar-red-preentrenada
+.\TARANTULIN.cmd visualizar-red-preentrenada
 ```
 
 Ese es el recorrido mínimo. Las secciones siguientes explican qué sucede, qué
@@ -82,129 +89,99 @@ cambio de código hecho directamente en la copia WSL.
 
 ## Requisitos previos
 
-- Windows 10 u 11 de 64 bits con virtualización disponible.
-- Conexión a Internet durante la primera instalación.
-- Varios GB libres para Ubuntu, Python y las librerías.
-- Permisos de administrador si Windows todavía tiene que instalar WSL.
-- Si quieres usar NVIDIA, un driver NVIDIA de Windows compatible con WSL.
+- Windows 10 2004 o posterior, o Windows 11, sobre arquitectura x86_64.
+- Virtualización habilitada en el equipo.
+- Conexión a Internet y varios GB libres durante la primera instalación.
+- Un driver NVIDIA de Windows compatible con WSL si se quiere entrenar con
+  NVIDIA.
+- Acceso autorizado a este repositorio privado para descargar el código.
 
-No necesitas instalar previamente Python, MuJoCo, JAX, `uv` ni crear una
-carpeta dentro de Linux. El instalador se encarga.
+No instalamos previamente Git, Python, MuJoCo, JAX, `uv`, CUDA Toolkit de Linux
+ni creamos carpetas dentro de Ubuntu. El instalador prepara lo necesario. La
+única parte interactiva que Windows no permite evitar es confirmar el aviso de
+administrador y crear una vez el usuario y la contraseña de Ubuntu.
 
-Si no sabes qué acelerador elegir, usa `auto`. Elegirá NVIDIA si puede usarla de
-verdad y, si no, preparará el modo CPU. Si sabes que tu equipo tiene NVIDIA y no
-quieres que un problema de driver pase desapercibido, elige `nvidia` de forma
-explícita.
+## Instalación desde cero
 
-## Instalación recomendada desde una carpeta vacía
+### Descarga del proyecto privado
 
-### Crea la carpeta donde quieras trabajar
-
-Por ejemplo:
+Entramos en este repositorio con la cuenta autorizada, pulsamos **Code → Download
+ZIP** y extraemos todo, por ejemplo en:
 
 ```text
-C:\Tarantulin
+C:\Sim2Real-Windows
 ```
 
-La carpeta debe estar vacía la primera vez. Ábrela en el Explorador de archivos,
-escribe `powershell` en la barra de direcciones y pulsa Intro. Así PowerShell se
-abre directamente en la carpeta correcta.
+No ejecutamos el instalador desde dentro del ZIP. Primero hay que extraer la
+carpeta completa. Una ruta corta evita los límites de longitud de algunas
+versiones de Windows.
 
-Para permitir los scripts solo durante esa ventana, sin cambiar la configuración
-permanente de Windows:
+El repositorio es privado y por eso no se ofrece un comando `irm ... | iex`:
+ese comando fingiría que GitHub puede descargar el código sin iniciar sesión.
+
+### Instalación automática
+
+Hacemos doble clic en:
+
+```text
+INSTALAR_WINDOWS.cmd
+```
+
+También puede ejecutarse desde PowerShell:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+.\INSTALAR_WINDOWS.cmd
 ```
 
-### Ejecuta el instalador
+El instalador comprueba Windows, arquitectura y hardware; instala o actualiza
+WSL, instala Ubuntu 24.04, crea la copia privada dentro del disco Linux, instala
+las dependencias fijadas y comprueba el acelerador. `auto` exige NVIDIA cuando
+Windows detecta una tarjeta NVIDIA. Así un driver defectuoso no queda oculto
+detrás de una ejecución accidental por CPU.
+
+### Reinicio y primer usuario de Ubuntu
+
+En un Windows completamente limpio pueden hacer falta dos pasadas:
+
+1. Ejecutamos `INSTALAR_WINDOWS.cmd`. Aceptamos el aviso de administrador.
+2. Si Windows lo solicita, reiniciamos.
+3. Abrimos `Ubuntu-24.04` una vez y creamos el usuario y la contraseña Linux.
+   La contraseña no se muestra mientras se escribe; es normal.
+4. Volvemos a ejecutar `INSTALAR_WINDOWS.cmd` desde la misma carpeta.
+
+La segunda ejecución continúa sobre lo ya instalado. No vuelve a descargar lo
+que está correcto ni borra los resultados. La creación de la contraseña Linux
+no se automatiza porque pertenece a la seguridad del usuario.
+
+### Selección explícita del acelerador
+
+Normalmente dejamos `auto`. Para exigir un perfil concreto abrimos PowerShell en
+la carpeta y usamos:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/GuillermoRosale5/Tarantulin-Windows-WSL/main/scripts/bootstrap_windows.ps1' | iex"
+.\INSTALAR_WINDOWS.cmd -Accelerator nvidia
+.\INSTALAR_WINDOWS.cmd -Accelerator cpu
 ```
 
-Este comando hace todo el recorrido:
+`nvidia` exige que la tarjeta sea visible desde WSL y que JAX termine sobre
+backend `gpu`. `cpu` sirve para instalación, desarrollo y pruebas pequeñas, no
+para entrenamiento masivo. AMD e Intel se dirigen de forma explícita a CPU en
+WSL2; no se presenta esa ruta como aceleración GPU validada. La explicación
+técnica está en [DEPENDENCIAS.md](DEPENDENCIAS.md).
 
-- instala Git con `winget` si todavía no está disponible;
-- descarga este repositorio dentro de la carpeta actual;
-- instala o reutiliza WSL2 y Ubuntu 24.04;
-- crea automáticamente la carpeta de ejecución dentro de Linux;
-- instala las librerías y crea el entorno Python;
-- elige NVIDIA o CPU;
-- deja preparados los mismos scripts que ya usamos en TARANTULIN.
+### Alternativa con Git ya instalado
 
-El proceso puede tardar porque tiene que descargar Ubuntu y las dependencias.
-No cierres la ventana mientras esté instalando.
-
-Si quieres exigir NVIDIA desde el primer momento, usa esta variante:
+Git pedirá iniciar sesión porque el repositorio es privado:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/GuillermoRosale5/Tarantulin-Windows-WSL/main/scripts/bootstrap_windows.ps1'))) -Accelerator nvidia"
+git -c core.longpaths=true clone https://github.com/GuillermoRosale5/PRIV_Tarantulin-Windows-WSL.git C:\Sim2Real-Windows
+cd C:\Sim2Real-Windows
+.\INSTALAR_WINDOWS.cmd
 ```
 
-### Reinicio de Windows y creación del usuario de Ubuntu
-
-Es normal que una instalación completamente nueva se detenga una vez.
-
-- Reinicia Windows si te lo solicita.
-- Abre `Ubuntu-24.04` desde el menú Inicio.
-- Crea el usuario y la contraseña de Linux. Mientras escribes la contraseña no
-  aparecen caracteres en pantalla; es normal.
-- Vuelve a la misma carpeta Windows y ejecuta otra vez el mismo comando.
-
-El instalador reconoce lo que ya está hecho y continúa. No vuelve a empezar ni
-borra la carpeta.
-
-Si Windows reconoce el comando `wsl` pero Ubuntu todavía no está instalado, abre
-una PowerShell como administrador y ejecuta:
-
-```powershell
-wsl --install -d Ubuntu-24.04
-```
-
-Después reinicia, abre Ubuntu una vez y repite el comando de instalación de
-TARANTULIN desde la misma carpeta Windows. Si Windows no reconoce en absoluto el
-comando `wsl`, primero hay que actualizar Windows o habilitar sus componentes de
-WSL siguiendo la
-[instalación oficial de Microsoft](https://learn.microsoft.com/windows/wsl/install).
-
-### Alternativa si ya tenemos Git
-
-Desde la carpeta Windows vacía podemos ver por separado la descarga y la
-instalación:
-
-```powershell
-git clone https://github.com/GuillermoRosale5/Tarantulin-Windows-WSL.git .
-.\install.ps1 -Accelerator nvidia
-```
-
-En un equipo sin NVIDIA sustituimos `nvidia` por `cpu`. El resultado es el mismo;
-esta ruta simplemente deja el paso de Git visible.
-
-## Instalación sobre una copia ya clonada
-
-Abre PowerShell dentro de la carpeta del proyecto y ejecuta:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-.\install.ps1 -Accelerator auto
-```
-
-Perfiles habituales:
-
-```powershell
-.\install.ps1 -Accelerator nvidia
-.\install.ps1 -Accelerator cpu
-```
-
-`nvidia` obliga a que JAX encuentre una GPU NVIDIA; si no la encuentra, la
-instalación falla en vez de continuar por CPU sin avisar. `cpu` sirve para
-desarrollar, comprobar XML y hacer pruebas pequeñas, pero no para entrenamiento
-masivo.
-
-En WSL, AMD continúa siendo una ruta experimental e Intel GPU no es compatible
-con las versiones de JAX usadas por este proyecto. La explicación técnica está
-en [DEPENDENCIAS.md](DEPENDENCIAS.md).
+El script `scripts\bootstrap_windows.ps1` también puede clonar el repositorio e
+instalar Git mediante `winget`, pero necesita igualmente la autenticación de
+GitHub. No guarda tokens ni contraseñas dentro del proyecto.
 
 ## Comprobación de la instalación
 
@@ -419,8 +396,8 @@ No combines una restauración con `--desde-cero`.
 
 ## Resultados y exportación
 
-Mientras se entrena, los registros y checkpoints permanecen dentro de WSL porque allí el
-acceso es más rápido. Para copiar la última ejecución a
+Los registros y checkpoints permanecen dentro de WSL porque allí el acceso es
+más rápido. Para copiar la última ejecución a
 `artifacts\logs_tarantulin_mjx` en Windows:
 
 ```powershell
@@ -433,9 +410,11 @@ Para copiar todas:
 .\tarantulin.ps1 pull-results -- --all
 ```
 
-La exportación no borra los originales de WSL. Si ya existe en Windows un
-archivo con el mismo nombre, la copia puede actualizarlo. `artifacts/` no se
-sube a GitHub.
+La exportación no borra los originales de WSL. Si se ejecuta durante un
+entrenamiento, copia los registros y las métricas, pero deja los checkpoints en
+WSL para no copiar uno mientras Orbax todavía lo está escribiendo. Al terminar
+o detener el entrenamiento repetimos `pull-results` y entonces se copian
+también los checkpoints completos. `artifacts/` no se sube a GitHub.
 
 ## Gráficas y recompensas en directo
 

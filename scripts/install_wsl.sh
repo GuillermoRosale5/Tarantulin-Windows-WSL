@@ -6,7 +6,6 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 RUN_SETUP=1
 INSTALL_SYSTEM_PACKAGES=1
 SKIP_GPU_CHECK=0
-ENABLE_EXPERIMENTAL_AMD_WSL=0
 ACCELERATOR="${TARANTULIN_BACKEND_PROFILE:-auto}"
 
 usage() {
@@ -24,8 +23,6 @@ Opciones:
   --skip-system-packages No ejecuta apt (lo usa el bootstrap Windows).
   --accelerator PERFIL   Seleccion de backend JAX.
   --skip-gpu-check       Instala aunque el backend solicitado aun no sea visible.
-  --enable-experimental-amd-wsl
-                         Permite intentar AMD/ROCm bajo WSL, no validado por AMD.
 EOF
 }
 
@@ -35,7 +32,6 @@ while [[ $# -gt 0 ]]; do
     --skip-system-packages) INSTALL_SYSTEM_PACKAGES=0; shift ;;
     --accelerator) ACCELERATOR="$2"; shift 2 ;;
     --skip-gpu-check) SKIP_GPU_CHECK=1; shift ;;
-    --enable-experimental-amd-wsl) ENABLE_EXPERIMENTAL_AMD_WSL=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Argumento no reconocido: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -71,6 +67,7 @@ install_apt_packages() {
     python3-venv
     python3-pip
     pkg-config
+    util-linux
     libgl1
     libegl1
     libglfw3
@@ -83,12 +80,28 @@ install_apt_packages() {
     exit 1
   fi
 
-  sudo apt-get update
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
+  local apt_options=(
+    -o Acquire::Retries=3
+    -o Acquire::http::Timeout=30
+    -o Acquire::https::Timeout=30
+    -o DPkg::Lock::Timeout=120
+  )
+  echo "apt puede tardar varios minutos; mientras muestre actividad no esta bloqueado."
+  sudo -v
+  sudo apt-get "${apt_options[@]}" update
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y "${packages[@]}"
 }
 
 ensure_wsl
 ensure_linux_fs
+if [[ -r /etc/os-release ]]; then
+  # shellcheck disable=SC1091
+  source /etc/os-release
+fi
+if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "24.04" ]]; then
+  echo "Esta variante necesita Ubuntu 24.04 bajo WSL; detectado ${PRETTY_NAME:-desconocido}." >&2
+  exit 1
+fi
 case "${ACCELERATOR}" in auto|nvidia|amd|intel|cpu) ;; *) echo "Acelerador no valido: ${ACCELERATOR}" >&2; exit 2 ;; esac
 if (( INSTALL_SYSTEM_PACKAGES == 1 )); then install_apt_packages; fi
 chmod +x "${REPO_ROOT}"/scripts/*.sh
@@ -97,7 +110,6 @@ chmod +x "${REPO_ROOT}"/scripts/wsl/*.sh 2>/dev/null || true
 if (( RUN_SETUP == 1 )); then
   export TARANTULIN_BACKEND_PROFILE="${ACCELERATOR}"
   if (( SKIP_GPU_CHECK == 1 )); then export TARANTULIN_SKIP_BACKEND_CHECK=1; fi
-  if (( ENABLE_EXPERIMENTAL_AMD_WSL == 1 )); then export TARANTULIN_ENABLE_EXPERIMENTAL_AMD_WSL=1; fi
   "${REPO_ROOT}/scripts/tarantulin.sh" setup
 else
   echo "Instalacion base OK. Setup completo omitido por --no-setup."

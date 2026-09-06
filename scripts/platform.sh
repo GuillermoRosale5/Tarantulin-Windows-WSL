@@ -66,29 +66,13 @@ tarantulin_accelerator_preflight() {
       fi
       ;;
     amd)
-      if [[ "${TARANTULIN_ENABLE_EXPERIMENTAL_AMD_WSL:-0}" != "1" ]]; then
-        echo "AMD/ROCm con JAX no esta habilitado ni validado oficialmente bajo WSL." >&2
-        echo "Usa -Accelerator cpu. Solo para una prueba consciente puedes anadir -EnableExperimentalAmdWsl." >&2
-        return 1
-      fi
-      echo "Aviso: modo AMD/ROCm experimental habilitado expresamente; puede no instalar, inicializar o ejecutar." >&2
-      if ! tarantulin_is_wsl; then
-        echo "Este repositorio espera WSL; usa el repositorio Linux-WSL para Linux nativo." >&2
-        return 1
-      fi
-      if ! tarantulin_has_amd_rocm; then
-        if [[ "${skip}" == "1" ]]; then
-          echo "Aviso: ROCm no esta operativo; se omite la comprobacion por configuracion." >&2
-          return 0
-        fi
-        echo "ROCm no expone una GPU AMD a WSL (rocminfo)." >&2
-        echo "Comprueba primero la matriz oficial AMD para WSL; si tu GPU no es compatible usa -Accelerator cpu." >&2
-        return 1
-      fi
+      echo "La aceleracion AMD/ROCm con JAX no esta admitida por esta version bajo WSL2." >&2
+      echo "Usa -Accelerator cpu en Windows/WSL o el repositorio Linux/WSL desde Ubuntu 24.04 nativo." >&2
+      return 1
       ;;
     intel)
       echo "La aceleracion Intel GPU no esta soportada por JAX/XLA en WSL para este proyecto." >&2
-      echo "Usa -Accelerator cpu en Windows/WSL o el repositorio Linux-WSL para probar el backend Intel experimental en Linux nativo." >&2
+      echo "Usa -Accelerator cpu; esta pila JAX/MJX tampoco habilita la GPU Intel en Ubuntu nativo." >&2
       return 1
       ;;
     cpu) ;;

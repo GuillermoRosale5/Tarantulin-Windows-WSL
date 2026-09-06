@@ -55,6 +55,10 @@ command -v rsync >/dev/null 2>&1 || {
   echo "Falta rsync dentro de WSL. Ejecuta .\\install.ps1 (sin -SyncOnly)." >&2
   exit 1
 }
+command -v flock >/dev/null 2>&1 || {
+  echo "Falta flock (paquete util-linux) dentro de WSL. Ejecuta .\\install.ps1 sin -SkipSystemPackages." >&2
+  exit 1
+}
 
 MARKER="${RUNTIME_ROOT}/.tarantulin-runtime"
 if [[ ! -e "${RUNTIME_ROOT}" ]]; then
@@ -65,8 +69,17 @@ if [[ ! -e "${RUNTIME_ROOT}" ]]; then
   mkdir -p "${RUNTIME_ROOT}"
 fi
 
+LOCK_FILE="${RUNTIME_ROOT}/runtime.lock"
+exec {RUNTIME_LOCK_FD}> "${LOCK_FILE}"
+if ! flock --exclusive --nonblock "${RUNTIME_LOCK_FD}"; then
+  echo "El runtime esta en uso por una simulacion, entrenamiento, visor o terminal: ${RUNTIME_ROOT}" >&2
+  echo "Deten el proceso correspondiente antes de sincronizar o reinstalar." >&2
+  exit 1
+fi
+
 if [[ ! -f "${MARKER}" ]]; then
-  if find "${RUNTIME_ROOT}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+  if find "${RUNTIME_ROOT}" -mindepth 1 -maxdepth 1 \
+      ! -name runtime.lock -print -quit | grep -q .; then
     echo "La ruta runtime existe, contiene datos y no tiene marcador: ${RUNTIME_ROOT}" >&2
     echo "No se borra ni se sobrescribe nada." >&2
     exit 1
@@ -107,6 +120,10 @@ rsync_args=(
   --exclude='/checkpoints buenos/'
   --exclude=/artifacts/
   --exclude=/.tarantulin-local/
+  --exclude=/.ruff_cache/
+  --exclude=/.pytest_cache/
+  --exclude=/.mypy_cache/
+  --exclude=/.coverage
   --exclude='**/__pycache__/'
   --exclude='*.pyc'
   --exclude='*.pid'
@@ -132,7 +149,9 @@ manifest_tmp="${RUNTIME_ROOT}/sync-manifest.sha256.tmp.$$"
     \( -path './.git' -o -path './.venv' -o -path './external' \
        -o -path './logs_tarantulin_mjx' -o -path './artifacts' \
        -o -path './checkpoints' -o -path './checkpoints buenos' \
-       -o -path './.tarantulin-local' -o -name '__pycache__' \) -prune \
+       -o -path './.tarantulin-local' -o -path './.ruff_cache' \
+       -o -path './.pytest_cache' -o -path './.mypy_cache' \
+       -o -name '__pycache__' \) -prune \
     -o -type f ! -name '*.pyc' ! -name '*.pid' -print0 |
     sort -z |
     while IFS= read -r -d '' file; do

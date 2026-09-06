@@ -10,11 +10,13 @@ UV_VERSION="0.11.8"
 LOGS_DIR="${REPO_ROOT}/logs_tarantulin_mjx"
 LAST_RUN="${LOGS_DIR}/ultima_run.txt"
 DEFAULT_RUN_PREFIX="TarantulinIncorporarse"
-DEFAULT_NUM_TIMESTEPS=30000000
 DEFAULT_EPISODE_LENGTH=1000
 PRETRAINED_MODEL_DIR="${REPO_ROOT}/pretrained/tarantulin_standup_fase2_45932544"
 PRETRAINED_CHECKPOINT="${PRETRAINED_MODEL_DIR}/checkpoints/000045932544"
 PRETRAINED_EPISODE_LENGTH=1500
+RUNTIME_ROOT_DIR="${TARANTULIN_RUNTIME_ROOT:-$(dirname -- "${REPO_ROOT}")}"
+RUNTIME_LOCK_FILE="${RUNTIME_ROOT_DIR}/runtime.lock"
+TRAINING_LOCK_FILE="${RUNTIME_ROOT_DIR}/training.lock"
 
 export PATH="${HOME}/.local/bin:${PATH}"
 # shellcheck source=platform.sh
@@ -79,7 +81,7 @@ ensure_playground() {
   }
 }
 
-sync_env() {
+sincronizar_entorno_sin_bloqueo() {
   ensure_playground
   cd "${PROJECT_DIR}"
   local profile
@@ -93,17 +95,32 @@ sync_env() {
       uv sync --frozen --no-dev
       ;;
     amd)
-      # Primero vuelve exactamente al lock CPU para retirar overlays CUDA/ROCm
-      # de perfiles anteriores; despues instala las tres wheels ROCm fijadas.
-      uv sync --frozen --no-dev
-      echo "Instalando overlay ROCm fijado y solicitado expresamente (modo WSL experimental)..." >&2
-      uv pip install --python "${VENV_PYTHON}" --no-deps --reinstall \
-        --requirements "${PROJECT_DIR}/requirements/amd-rocm70-py312.txt"
+      echo "La GPU AMD no esta admitida por esta variante Windows + WSL2; usa --accelerator cpu." >&2
+      return 1
       ;;
     intel)
-      tarantulin_accelerator_preflight intel
+      echo "La GPU Intel no esta admitida por esta variante Windows + WSL2; usa --accelerator cpu." >&2
+      return 1
       ;;
   esac
+}
+
+sync_env() {
+  if [[ "${TARANTULIN_RUNTIME_LOCK_HELD:-}" == "exclusive" ]]; then
+    sincronizar_entorno_sin_bloqueo
+    return
+  fi
+  command -v flock >/dev/null 2>&1 || {
+    echo "Falta flock (paquete util-linux). Repite la instalacion completa desde Windows." >&2
+    return 1
+  }
+  exec {setup_lock_fd}> "${RUNTIME_LOCK_FILE}"
+  if ! flock --exclusive --nonblock "${setup_lock_fd}"; then
+    echo "No se puede modificar el entorno mientras otro comando usa este runtime." >&2
+    echo "Deten el entrenamiento o visor y cierra cualquier terminal TARANTULIN antes de ejecutar setup." >&2
+    return 1
+  fi
+  TARANTULIN_RUNTIME_LOCK_HELD=exclusive sincronizar_entorno_sin_bloqueo
 }
 
 python_base_env() {
@@ -164,7 +181,15 @@ uv_python() {
     echo "Entorno Python ausente: ${VENV_PYTHON}. Ejecuta setup/install.ps1." >&2
     return 1
   }
-  "${VENV_PYTHON}" "$@"
+  if [[ -n "${TARANTULIN_RUNTIME_LOCK_HELD:-}" ]]; then
+    "${VENV_PYTHON}" "$@"
+  else
+    command -v flock >/dev/null 2>&1 || {
+      echo "Falta flock (paquete util-linux). Repite la instalacion completa desde Windows." >&2
+      return 1
+    }
+    flock --shared "${RUNTIME_LOCK_FILE}" "${VENV_PYTHON}" "$@"
+  fi
 }
 
 print_backend() {
@@ -189,7 +214,7 @@ Perfiles PPO disponibles:
 Uso rapido:
   ./scripts/lanzar_tarantulin.sh --perfil-ppo ligero
   ./scripts/lanzar_tarantulin.sh --perfil-ppo depuracion
-  ./scripts/tarantulin.sh entrenar --segundo-plano --setup --perfil-ppo ligero_rapido --fase-recompensa 1
+  ./scripts/tarantulin.sh entrenar --segundo-plano --perfil-ppo ligero_rapido --fase-recompensa 1
 
 Overrides siguen disponibles:
   --num-timesteps --num-envs --num-evals --episode-length --batch-size
@@ -277,11 +302,9 @@ verify_versions() {
   python_base_env
   uv_python - <<'PY'
 import importlib.metadata as md
-import os
 from tarantulin.hiperparametros import VERSIONES_ESPERADAS
 
 errors = []
-profile = os.environ.get("TARANTULIN_RESOLVED_BACKEND_PROFILE", "")
 for package, expected in VERSIONES_ESPERADAS.items():
   try:
     got = md.version(package)
@@ -289,9 +312,7 @@ for package, expected in VERSIONES_ESPERADAS.items():
     errors.append(f"{package}: no instalado")
     continue
   print(f"{package}=={got}")
-  if profile == "amd" and package in {"jax", "jaxlib"}:
-    print(f"  nota: version gestionada por el plugin ROCm experimental (referencia original {expected})")
-  elif got != expected:
+  if got != expected:
     errors.append(f"{package}: esperado {expected}, encontrado {got}")
 if errors:
   raise SystemExit("Versiones no fijadas:\n" + "\n".join(errors))
@@ -400,12 +421,39 @@ escribir_inicio_proceso() {
   mv -f -- "${temporary}" "${destination}"
 }
 
+proceso_lanzador_corresponde_ejecucion() {
+  local pid="$1" run_dir="$2"
+  local pid_path="${run_dir}/lanzador.pid"
+  local start_path="${run_dir}/lanzador.starttime"
+  local saved_pid saved_start
+  comprobar_ruta_ejecucion_segura "${run_dir}" || return 1
+  saved_pid="$(tarantulin_read_safe_pid_file "${pid_path}" 2>/dev/null)" || return 1
+  saved_start="$(tarantulin_read_safe_starttime_file "${start_path}" 2>/dev/null)" || return 1
+  [[ "${saved_pid}" == "${pid}" ]] || return 1
+  tarantulin_launcher_process_matches \
+    "${pid}" "${REPO_ROOT}" "${LOGS_DIR}" "${run_dir}" "${saved_start}"
+}
+
+proceso_curriculo_corresponde_ejecucion() {
+  local pid="$1" run_dir="$2"
+  local pid_path="${run_dir}/curriculo_automatico.pid"
+  local start_path="${run_dir}/curriculo_automatico.starttime"
+  local saved_pid saved_start
+  comprobar_ruta_ejecucion_segura "${run_dir}" || return 1
+  saved_pid="$(tarantulin_read_safe_pid_file "${pid_path}" 2>/dev/null)" || return 1
+  saved_start="$(tarantulin_read_safe_starttime_file "${start_path}" 2>/dev/null)" || return 1
+  [[ "${saved_pid}" == "${pid}" ]] || return 1
+  tarantulin_curriculum_process_matches \
+    "${pid}" "${SCRIPT_DIR}/curriculo_automatico_tarantulin.sh" \
+    "${run_dir}" "${saved_start}"
+}
+
 ejecucion_activa_actual_con_pid() {
   local run_dir
   run_dir="$(ejecucion_actual)"
   if [[ -n "${run_dir}" && -f "${run_dir}/entrenamiento.pid" ]]; then
     local saved_pid
-    saved_pid="$(cat "${run_dir}/entrenamiento.pid")"
+    saved_pid="$(tarantulin_read_safe_pid_file "${run_dir}/entrenamiento.pid" 2>/dev/null || true)"
     if proceso_entrenamiento_corresponde_ejecucion "${saved_pid}" "${run_dir}" 2>/dev/null; then
       printf '%s\t%s\n' "${run_dir}" "${saved_pid}"
       return
@@ -415,7 +463,7 @@ ejecucion_activa_actual_con_pid() {
   find "${LOGS_DIR}" -mindepth 2 -maxdepth 2 -name entrenamiento.pid -print 2>/dev/null |
     while IFS= read -r pid_file; do
       local candidate
-      candidate="$(cat "${pid_file}")"
+      candidate="$(tarantulin_read_safe_pid_file "${pid_file}" 2>/dev/null || true)"
       if proceso_entrenamiento_corresponde_ejecucion "${candidate}" "$(dirname "${pid_file}")" 2>/dev/null; then
         printf '%s\t%s\t%s\n' "$(stat -c %Y "${pid_file}")" "$(dirname "${pid_file}")" "${candidate}"
       fi
@@ -423,6 +471,134 @@ ejecucion_activa_actual_con_pid() {
     sort -nr |
     head -1 |
     awk -F '\t' 'NF >= 3 {print $2 "\t" $3}'
+}
+
+ejecucion_tiene_proceso_activo() {
+  local run_dir="$1" pid train_pid
+  comprobar_ruta_ejecucion_segura "${run_dir}" || return 1
+  if pid="$(tarantulin_read_safe_pid_file "${run_dir}/curriculo_automatico.pid" 2>/dev/null)" &&
+      proceso_curriculo_corresponde_ejecucion "${pid}" "${run_dir}"; then
+    return 0
+  fi
+  if pid="$(tarantulin_read_safe_pid_file "${run_dir}/entrenamiento.pid" 2>/dev/null)" &&
+      proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}"; then
+    return 0
+  fi
+  if pid="$(tarantulin_read_safe_pid_file "${run_dir}/lanzador.pid" 2>/dev/null)" &&
+      proceso_lanzador_corresponde_ejecucion "${pid}" "${run_dir}"; then
+    return 0
+  fi
+  if pid="$(tarantulin_read_safe_pid_file "${run_dir}/proteccion_termica.pid" 2>/dev/null)" &&
+      train_pid="$(tarantulin_read_safe_pid_file "${run_dir}/entrenamiento.pid" 2>/dev/null)" &&
+      proceso_proteccion_corresponde_ejecucion "${pid}" "${train_pid}" "${run_dir}"; then
+    return 0
+  fi
+  return 1
+}
+
+ejecucion_con_proceso_activo() {
+  local current run_dir
+  current="$(ejecucion_actual)"
+  if [[ -n "${current}" ]] && ejecucion_tiene_proceso_activo "${current}"; then
+    printf '%s\n' "${current}"
+    return 0
+  fi
+  while IFS= read -r run_dir; do
+    [[ "${run_dir}" != "${current}" ]] || continue
+    if ejecucion_tiene_proceso_activo "${run_dir}"; then
+      printf '%s\n' "${run_dir}"
+      return 0
+    fi
+  done < <(
+    find "${LOGS_DIR}" -mindepth 1 -maxdepth 1 -type d -printf '%T@\t%p\n' 2>/dev/null |
+      sort -nr | cut -f2-
+  )
+  return 1
+}
+
+ejecucion_activa_entrenamiento_o_lanzador() {
+  local run_dir pid
+  comprobar_raiz_logs_segura || return 1
+  for run_dir in "${LOGS_DIR}"/*; do
+    [[ -d "${run_dir}" && ! -L "${run_dir}" ]] || continue
+    if pid="$(tarantulin_read_safe_pid_file "${run_dir}/entrenamiento.pid" 2>/dev/null)" &&
+        proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}"; then
+      printf '%s\t%s\n' "${run_dir}" "${pid}"
+      return 0
+    fi
+    if pid="$(tarantulin_read_safe_pid_file "${run_dir}/lanzador.pid" 2>/dev/null)" &&
+        proceso_lanzador_corresponde_ejecucion "${pid}" "${run_dir}"; then
+      printf '%s\t%s\n' "${run_dir}" "${pid}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+actualizar_estado_ejecucion() {
+  local run_dir="$1" estado="$2" motivo="${3:-}"
+  comprobar_ruta_ejecucion_segura "${run_dir}" || return 1
+  python3 - "${run_dir}/estado.json" "${estado}" "${motivo}" <<'PY'
+import datetime as dt
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+path = Path(sys.argv[1])
+requested_state = sys.argv[2]
+reason = sys.argv[3]
+if path.is_symlink():
+    raise SystemExit(f"estado.json no puede ser un enlace simbolico: {path}")
+payload = {}
+if path.is_file():
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(previous, dict):
+            payload.update(previous)
+    except (OSError, ValueError, TypeError):
+        pass
+if payload.get("estado") in {"terminado", "error", "cancelado"}:
+    raise SystemExit(0)
+payload["estado"] = requested_state
+payload["timestamp"] = dt.datetime.now().isoformat(timespec="seconds")
+if requested_state in {"terminado", "error", "cancelado"}:
+    payload["pid"] = None
+if reason:
+    payload["motivo_cancelacion"] = reason
+descriptor, temporary_name = tempfile.mkstemp(
+    prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+)
+temporary_path = Path(temporary_name)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary_path, path)
+finally:
+    temporary_path.unlink(missing_ok=True)
+PY
+}
+
+escribir_solicitud_parada() {
+  local run_dir="$1" tipo="$2" motivo="${3:-solicitada por el usuario}"
+  local marker temporary
+  comprobar_ruta_ejecucion_segura "${run_dir}" || return 1
+  case "${tipo}" in
+    entrenamiento) marker="${run_dir}/parada_entrenamiento_solicitada" ;;
+    total) marker="${run_dir}/parada_total_solicitada" ;;
+    *) return 1 ;;
+  esac
+  [[ ! -L "${marker}" ]] || {
+    echo "No se escribe una parada sobre un enlace simbolico: ${marker}" >&2
+    return 1
+  }
+  temporary="$(mktemp "${run_dir}/.parada_solicitada.XXXXXX")"
+  printf '%s\t%s\n' "$(date --iso-8601=seconds)" "${motivo}" > "${temporary}"
+  mv -f -- "${temporary}" "${marker}"
 }
 
 pid_actual() {
@@ -517,7 +693,8 @@ run_test_mjx() {
 }
 
 run_benchmark() {
-  local run_name="benchmark-$(date +%Y%m%d-%H%M%S)"
+  local run_name
+  run_name="benchmark-$(date +%Y%m%d-%H%M%S)"
   local warmup_steps=64
   local measure_steps=256
   local impl="jax"
@@ -626,9 +803,14 @@ iniciar_proteccion_termica() {
   local train_pid="$1"
   local run_dir="$2"
   local guard_log="${run_dir}/proteccion_termica.log"
-  local train_starttime
+  local train_starttime profile
   if [[ "${TARANTULIN_THERMAL_GUARD:-1}" == "0" ]]; then
     echo "Proteccion termica desactivada por TARANTULIN_THERMAL_GUARD=0."
+    return 0
+  fi
+  profile="$(tarantulin_resolve_accelerator)"
+  if [[ "${profile}" != "nvidia" ]]; then
+    echo "Proteccion termica NVIDIA no necesaria para el perfil ${profile}."
     return 0
   fi
   if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -661,8 +843,17 @@ iniciar_proteccion_termica() {
   mv -f -- "${guard_pid_tmp}" "${run_dir}/proteccion_termica.pid"
   escribir_inicio_proceso "${guard_pid}" "${run_dir}/proteccion_termica.starttime" || {
     echo "No se pudo registrar la identidad de la proteccion termica; no se le enviaran senales automaticas." >&2
+    kill -TERM "${guard_pid}" >/dev/null 2>&1 || true
+    wait "${guard_pid}" >/dev/null 2>&1 || true
+    rm -f -- "${run_dir}/proteccion_termica.pid" "${run_dir}/proteccion_termica.starttime"
     return 1
   }
+  if ! kill -0 "${guard_pid}" >/dev/null 2>&1; then
+    wait "${guard_pid}" >/dev/null 2>&1 || true
+    rm -f -- "${run_dir}/proteccion_termica.pid" "${run_dir}/proteccion_termica.starttime"
+    echo "La proteccion termica termino durante el arranque; revisa ${guard_log}." >&2
+    return 1
+  fi
   echo "Proteccion termica activa. PID de proteccion: ${guard_pid}. Registro: ${guard_log}"
 }
 
@@ -694,7 +885,8 @@ iniciar_proteccion_termica_actual() {
 }
 
 entrenar() {
-  local run_name="${DEFAULT_RUN_PREFIX}-$(date +%Y%m%d-%H%M%S)"
+  local run_name
+  run_name="${DEFAULT_RUN_PREFIX}-$(date +%Y%m%d-%H%M%S)"
   local num_timesteps=""
   local num_envs=""
   local num_evals=""
@@ -791,6 +983,18 @@ entrenar() {
   fi
   echo ""
 
+  command -v flock >/dev/null 2>&1 || {
+    echo "Falta flock (paquete util-linux). Repite la instalacion completa desde Windows." >&2
+    exit 1
+  }
+  local training_lock_fd
+  exec {training_lock_fd}> "${TRAINING_LOCK_FILE}"
+  if ! flock --exclusive --nonblock "${training_lock_fd}"; then
+    echo "Ya hay otro entrenamiento iniciandose o ejecutandose en este runtime." >&2
+    echo "Usa monitorizar para verlo o parar para detenerlo." >&2
+    exit 1
+  fi
+
   ensure_wsl
   ensure_linux_fs
   ensure_gpu_visible
@@ -800,10 +1004,11 @@ entrenar() {
   train_env
   require_compute_backend
 
-  local active_pid
-  active_pid="$(pid_actual || true)"
-  if pid_activo "${active_pid}"; then
-    echo "Ya hay entrenamiento activo con PID ${active_pid}." >&2
+  local active_process active_run active_pid
+  active_process="$(ejecucion_activa_entrenamiento_o_lanzador || true)"
+  if [[ -n "${active_process}" ]]; then
+    IFS=$'\t' read -r active_run active_pid <<< "${active_process}"
+    echo "Ya hay un entrenamiento o lanzador activo con PID ${active_pid} en ${active_run}." >&2
     exit 1
   fi
 
@@ -811,7 +1016,9 @@ entrenar() {
     run_test_mjx --steps 150 --impl "${impl}"
   fi
 
-  if [[ ! -f "${LOGS_DIR}"/benchmark-*/benchmark.csv ]]; then
+  if ! find "${LOGS_DIR}" -mindepth 2 -maxdepth 2 -type f \
+      -path "${LOGS_DIR}/benchmark-*/benchmark.csv" -print -quit 2>/dev/null |
+      grep -q .; then
     echo "Aviso: no encuentro benchmark.csv reciente. Recomendado: scripts/tarantulin.sh benchmark"
   fi
 
@@ -832,8 +1039,14 @@ entrenar() {
   rm -f \
     "${run_dir}/entrenamiento.pid" \
     "${run_dir}/entrenamiento.starttime" \
+    "${run_dir}/lanzador.pid" \
+    "${run_dir}/lanzador.starttime" \
     "${run_dir}/proteccion_termica.pid" \
-    "${run_dir}/proteccion_termica.starttime"
+    "${run_dir}/proteccion_termica.starttime" \
+    "${run_dir}/parada_entrenamiento_solicitada"
+  if [[ "${TARANTULIN_CURRICULUM_CHILD:-0}" != "1" ]]; then
+    rm -f "${run_dir}/parada_total_solicitada"
+  fi
   escribir_ultima_ejecucion "${run_dir}"
 
   local -a cmd=(
@@ -900,11 +1113,14 @@ entrenar() {
     cmd+=(--reset_checkpoint)
   fi
 
+  cd "${REPO_ROOT}"
+
   if (( background == 1 )); then
     : > "${run_dir}/entrenamiento.log"
     {
       printf 'cd %q\n' "${REPO_ROOT}"
-      printf 'env PYTHONUNBUFFERED=1 PYTHONPATH=%q XLA_PYTHON_CLIENT_PREALLOCATE=%q XLA_PYTHON_CLIENT_MEM_FRACTION=%q MUJOCO_GL=egl JAX_DEFAULT_MATMUL_PRECISION=%q %q' \
+      printf 'flock --shared %q env PYTHONUNBUFFERED=1 PYTHONPATH=%q XLA_PYTHON_CLIENT_PREALLOCATE=%q XLA_PYTHON_CLIENT_MEM_FRACTION=%q MUJOCO_GL=egl JAX_DEFAULT_MATMUL_PRECISION=%q %q' \
+        "${RUNTIME_LOCK_FILE}" \
         "${REPO_ROOT}" \
         "${XLA_PYTHON_CLIENT_PREALLOCATE:-false}" \
         "${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.70}" \
@@ -913,7 +1129,7 @@ entrenar() {
       printf ' %q' "${cmd[@]}"
       printf '\n'
     } > "${run_dir}/comando_lanzador.sh"
-    nohup env \
+    nohup flock --shared "${RUNTIME_LOCK_FILE}" env \
       PYTHONUNBUFFERED=1 \
       PYTHONPATH="${REPO_ROOT}" \
       XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}" \
@@ -923,7 +1139,11 @@ entrenar() {
       "${VENV_PYTHON}" "${cmd[@]}" \
       >> "${run_dir}/entrenamiento.log" 2>&1 < /dev/null &
     local launcher_pid=$!
-    printf '%s\n' "${launcher_pid}" > "${run_dir}/lanzador.pid"
+    escribir_inicio_proceso "${launcher_pid}" "${run_dir}/lanzador.starttime"
+    local launcher_pid_temp
+    launcher_pid_temp="$(mktemp "${run_dir}/.lanzador.pid.XXXXXX")"
+    printf '%s\n' "${launcher_pid}" > "${launcher_pid_temp}"
+    mv -f -- "${launcher_pid_temp}" "${run_dir}/lanzador.pid"
     echo "Entrenamiento lanzado. Ejecucion: ${run_dir}"
     echo "PID lanzador: ${launcher_pid}"
     echo "Registro: ${run_dir}/entrenamiento.log"
@@ -956,7 +1176,7 @@ entrenar() {
     fi
   else
     : > "${run_dir}/entrenamiento.log"
-    env \
+    flock --shared "${RUNTIME_LOCK_FILE}" env \
       PYTHONUNBUFFERED=1 \
       PYTHONPATH="${REPO_ROOT}" \
       XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}" \
@@ -965,6 +1185,11 @@ entrenar() {
       JAX_DEFAULT_MATMUL_PRECISION="${JAX_DEFAULT_MATMUL_PRECISION:-high}" \
       "${VENV_PYTHON}" "${cmd[@]}" &
     local launcher_pid=$!
+    escribir_inicio_proceso "${launcher_pid}" "${run_dir}/lanzador.starttime"
+    local launcher_pid_temp
+    launcher_pid_temp="$(mktemp "${run_dir}/.lanzador.pid.XXXXXX")"
+    printf '%s\n' "${launcher_pid}" > "${launcher_pid_temp}"
+    mv -f -- "${launcher_pid_temp}" "${run_dir}/lanzador.pid"
     for _ in $(seq 1 30); do
       [[ -f "${run_dir}/entrenamiento.pid" ]] && break
       sleep 1
@@ -979,46 +1204,160 @@ entrenar() {
 }
 
 parar_entrenamiento() {
-  local run_info run_dir pid guard_pid
-  run_info="$(ejecucion_activa_actual_con_pid || true)"
-  IFS=$'\t' read -r run_dir pid <<< "${run_info}"
-  if [[ -z "${run_dir}" || -z "${pid}" ]]; then
-    echo "No hay entrenamiento activo con identidad validada."
+  local solo_entrenamiento=0 nombre_ejecucion="" run_dir="" motivo
+  local pid="" guard_pid="" launcher_pid="" supervisor_pid=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --solo-entrenamiento) solo_entrenamiento=1; shift ;;
+      --ejecucion)
+        [[ $# -ge 2 ]] || { echo "Falta el valor de --ejecucion." >&2; return 2; }
+        nombre_ejecucion="$2"
+        shift 2
+        ;;
+      *) echo "Argumento no reconocido para parar: $1" >&2; return 2 ;;
+    esac
+  done
+
+  if [[ -n "${nombre_ejecucion}" ]]; then
+    validar_nombre_ejecucion "${nombre_ejecucion}"
+    run_dir="${LOGS_DIR}/${nombre_ejecucion}"
+    [[ -d "${run_dir}" && ! -L "${run_dir}" ]] || {
+      echo "No existe la ejecucion ${nombre_ejecucion}." >&2
+      return 1
+    }
+    comprobar_ruta_ejecucion_segura "${run_dir}"
+  else
+    run_dir="$(ejecucion_con_proceso_activo || true)"
+  fi
+  if [[ -z "${run_dir}" ]] || ! ejecucion_tiene_proceso_activo "${run_dir}"; then
+    echo "No hay PID guardado ni proceso de TARANTULIN activo."
     return 0
   fi
-  comprobar_ruta_ejecucion_segura "${run_dir}"
-  if ! proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}"; then
-    echo "SEGURIDAD: PID ${pid} no corresponde al entrenamiento de esta ejecucion." >&2
-    echo "No se envia ninguna senal; el marcador puede estar obsoleto o el PID fue reutilizado." >&2
-    return 1
+
+  if (( solo_entrenamiento == 1 )); then
+    motivo="bloque de entrenamiento cancelado por el supervisor curricular"
+    escribir_solicitud_parada "${run_dir}" entrenamiento "${motivo}"
+  else
+    motivo="entrenamiento y supervisor cancelados por el usuario"
+    escribir_solicitud_parada "${run_dir}" total "${motivo}"
   fi
-  if [[ -n "${run_dir}" && -f "${run_dir}/proteccion_termica.pid" ]]; then
-    guard_pid="$(tr -d '\r\n' < "${run_dir}/proteccion_termica.pid")"
-    if pid_activo "${guard_pid}"; then
-      if proceso_proteccion_corresponde_ejecucion "${guard_pid}" "${pid}" "${run_dir}"; then
-        echo "Parando proteccion termica PID ${guard_pid}..."
-        proceso_proteccion_corresponde_ejecucion "${guard_pid}" "${pid}" "${run_dir}" && kill "${guard_pid}" || true
-      else
-        echo "SEGURIDAD: PID ${guard_pid} no corresponde a la proteccion de esta ejecucion; no se senaliza." >&2
+  actualizar_estado_ejecucion "${run_dir}" "cancelando" "${motivo}"
+
+  if (( solo_entrenamiento == 0 )); then
+    supervisor_pid="$(tarantulin_read_safe_pid_file "${run_dir}/curriculo_automatico.pid" 2>/dev/null || true)"
+    if proceso_curriculo_corresponde_ejecucion "${supervisor_pid}" "${run_dir}"; then
+      echo "Parando supervisor curricular PID ${supervisor_pid}..."
+      proceso_curriculo_corresponde_ejecucion "${supervisor_pid}" "${run_dir}" &&
+        kill -TERM "${supervisor_pid}" || true
+
+      # El supervisor es quien conoce el bloque que tiene activo. Le damos
+      # tiempo para cerrar primero su entrenamiento y evitamos que dos
+      # procesos intenten parar los mismos PID a la vez.
+      for _ in $(seq 1 100); do
+        proceso_curriculo_corresponde_ejecucion "${supervisor_pid}" "${run_dir}" || break
+        sleep 0.2
+      done
+      if ! proceso_curriculo_corresponde_ejecucion "${supervisor_pid}" "${run_dir}" &&
+          ! ejecucion_tiene_proceso_activo "${run_dir}"; then
+        actualizar_estado_ejecucion "${run_dir}" "cancelado" "${motivo}"
+        rm -f -- \
+          "${run_dir}/entrenamiento.pid" \
+          "${run_dir}/entrenamiento.starttime" \
+          "${run_dir}/lanzador.pid" \
+          "${run_dir}/lanzador.starttime" \
+          "${run_dir}/proteccion_termica.pid" \
+          "${run_dir}/proteccion_termica.starttime" \
+          "${run_dir}/curriculo_automatico.pid" \
+          "${run_dir}/curriculo_automatico.starttime"
+        echo "Parada completada para ${run_dir}."
+        return 0
       fi
     fi
   fi
-  echo "Parando entrenamiento PID ${pid}..."
-  if ! proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}"; then
-    echo "La identidad del proceso cambio antes de SIGTERM; no se envia la senal." >&2
-    return 1
-  fi
-  kill "${pid}" || return 0
-  for _ in $(seq 1 10); do
-    proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}" || return 0
-    sleep 1
+
+  for _ in $(seq 1 75); do
+    pid="$(tarantulin_read_safe_pid_file "${run_dir}/entrenamiento.pid" 2>/dev/null || true)"
+    if proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}"; then
+      break
+    fi
+    launcher_pid="$(tarantulin_read_safe_pid_file "${run_dir}/lanzador.pid" 2>/dev/null || true)"
+    if ! proceso_lanzador_corresponde_ejecucion "${launcher_pid}" "${run_dir}"; then
+      pid=""
+      break
+    fi
+    sleep 0.2
   done
-  if proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}"; then
-    echo "PID ${pid} sigue activo y conserva su identidad; enviando SIGKILL."
-    kill -9 "${pid}" || true
-  else
-    echo "La identidad de PID ${pid} cambio; no se envia SIGKILL." >&2
+
+  pid="$(tarantulin_read_safe_pid_file "${run_dir}/entrenamiento.pid" 2>/dev/null || true)"
+  guard_pid="$(tarantulin_read_safe_pid_file "${run_dir}/proteccion_termica.pid" 2>/dev/null || true)"
+  if proceso_proteccion_corresponde_ejecucion "${guard_pid}" "${pid}" "${run_dir}"; then
+    echo "Parando proteccion termica PID ${guard_pid}..."
+    proceso_proteccion_corresponde_ejecucion "${guard_pid}" "${pid}" "${run_dir}" &&
+      kill -TERM "${guard_pid}" || true
+  elif pid_activo "${guard_pid}"; then
+    echo "SEGURIDAD: PID ${guard_pid} no corresponde a la proteccion termica de esta ejecucion; no se senaliza." >&2
   fi
+
+  if proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}"; then
+    echo "Parando entrenamiento PID ${pid}..."
+    proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}" &&
+      kill -TERM "${pid}" || true
+    for _ in $(seq 1 50); do
+      proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}" || break
+      sleep 0.2
+    done
+    if proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}"; then
+      echo "PID ${pid} sigue activo y conserva su identidad; enviando SIGKILL."
+      proceso_entrenamiento_corresponde_ejecucion "${pid}" "${run_dir}" &&
+        kill -KILL "${pid}" || true
+    fi
+  fi
+
+  launcher_pid="$(tarantulin_read_safe_pid_file "${run_dir}/lanzador.pid" 2>/dev/null || true)"
+  if proceso_lanzador_corresponde_ejecucion "${launcher_pid}" "${run_dir}"; then
+    echo "Parando lanzador PID ${launcher_pid}..."
+    proceso_lanzador_corresponde_ejecucion "${launcher_pid}" "${run_dir}" &&
+      kill -TERM "${launcher_pid}" || true
+    for _ in $(seq 1 25); do
+      proceso_lanzador_corresponde_ejecucion "${launcher_pid}" "${run_dir}" || break
+      sleep 0.2
+    done
+    if proceso_lanzador_corresponde_ejecucion "${launcher_pid}" "${run_dir}"; then
+      echo "Lanzador PID ${launcher_pid} sigue activo; enviando SIGKILL."
+      proceso_lanzador_corresponde_ejecucion "${launcher_pid}" "${run_dir}" &&
+        kill -KILL "${launcher_pid}" || true
+    fi
+  fi
+
+  if (( solo_entrenamiento == 0 )); then
+    supervisor_pid="$(tarantulin_read_safe_pid_file "${run_dir}/curriculo_automatico.pid" 2>/dev/null || true)"
+    for _ in $(seq 1 25); do
+      proceso_curriculo_corresponde_ejecucion "${supervisor_pid}" "${run_dir}" || break
+      sleep 0.2
+    done
+    if proceso_curriculo_corresponde_ejecucion "${supervisor_pid}" "${run_dir}"; then
+      echo "Supervisor PID ${supervisor_pid} sigue activo; enviando SIGKILL."
+      proceso_curriculo_corresponde_ejecucion "${supervisor_pid}" "${run_dir}" &&
+        kill -KILL "${supervisor_pid}" || true
+    fi
+  fi
+
+  actualizar_estado_ejecucion "${run_dir}" "cancelado" "${motivo}"
+  if ! ejecucion_tiene_proceso_activo "${run_dir}"; then
+    rm -f -- \
+      "${run_dir}/entrenamiento.pid" \
+      "${run_dir}/entrenamiento.starttime" \
+      "${run_dir}/lanzador.pid" \
+      "${run_dir}/lanzador.starttime" \
+      "${run_dir}/proteccion_termica.pid" \
+      "${run_dir}/proteccion_termica.starttime"
+    if (( solo_entrenamiento == 0 )); then
+      rm -f -- \
+        "${run_dir}/curriculo_automatico.pid" \
+        "${run_dir}/curriculo_automatico.starttime"
+    fi
+  fi
+  echo "Parada completada para ${run_dir}."
 }
 
 check_swap() {
@@ -1029,7 +1368,8 @@ check_swap() {
 mostrar_detalles_ejecucion() {
   local run_dir="$1"
   local pid="${2:-}"
-  python3 - "${run_dir}" "${pid}" <<'PY'
+  local guard_pid="${3:-}"
+  python3 - "${run_dir}" "${pid}" "${guard_pid}" <<'PY'
 import csv
 import json
 import sys
@@ -1037,6 +1377,7 @@ from pathlib import Path
 
 run = Path(sys.argv[1])
 pid = sys.argv[2] if len(sys.argv) > 2 else ""
+guard_pid = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else "n/a"
 
 def load_json(name):
   path = run / name
@@ -1188,10 +1529,7 @@ if ckpt_root.exists():
   )
 
 estado_json = estado.get("estado", "n/a")
-pid_estado = str(estado.get("pid", "") or "")
 pid_real = pid or "n/a"
-guard_path = run / "proteccion_termica.pid"
-guard_pid = guard_path.read_text(encoding="utf-8").strip() if guard_path.exists() else "n/a"
 thermal_log = run / "proteccion_termica.log"
 
 def to_float(value):
@@ -1342,6 +1680,10 @@ reiniciar_estado_checkpoint() {
     echo "Ruta fuera de logs_tarantulin_mjx, no borro nada: ${resolved_run}" >&2
     exit 1
   fi
+  if ejecucion_tiene_proceso_activo "${run_dir}"; then
+    echo "La ejecucion todavia tiene un entrenamiento, lanzador o supervisor activo; usa 'parar' antes de resetear el checkpoint." >&2
+    exit 1
+  fi
   local pid guard_pid recorded_train_pid
   pid="$(pid_actual || true)"
   if pid_activo "${pid}"; then
@@ -1370,12 +1712,19 @@ reiniciar_estado_checkpoint() {
     "${run_dir}/entrenamiento.pid" \
     "${run_dir}/entrenamiento.starttime" \
     "${run_dir}/lanzador.pid" \
+    "${run_dir}/lanzador.starttime" \
     "${run_dir}/proteccion_termica.pid" \
-    "${run_dir}/proteccion_termica.starttime"
+    "${run_dir}/proteccion_termica.starttime" \
+    "${run_dir}/curriculo_automatico.pid" \
+    "${run_dir}/curriculo_automatico.starttime" \
+    "${run_dir}/parada_entrenamiento_solicitada" \
+    "${run_dir}/parada_total_solicitada"
   python3 - "${run_dir}" <<'PY'
 import datetime as dt
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 run = Path(sys.argv[1])
@@ -1392,10 +1741,13 @@ estado.update({
     "checkpoint_reseteado": True,
     "pid": None,
 })
-estado_path.write_text(
-    json.dumps(estado, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-    encoding="utf-8",
-)
+with tempfile.NamedTemporaryFile(
+    mode="w", encoding="utf-8", dir=run, prefix=".estado.", suffix=".tmp", delete=False
+) as handle:
+  json.dump(estado, handle, indent=2, sort_keys=True, ensure_ascii=False)
+  handle.write("\n")
+  temporary = Path(handle.name)
+os.replace(temporary, estado_path)
 PY
   escribir_ultima_ejecucion "${run_dir}"
   echo "Checkpoint reiniciado en: ${run_dir}"
@@ -1403,9 +1755,23 @@ PY
 }
 
 monitorizar() {
+  local una_vez=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --una-vez) una_vez=1; shift ;;
+      --help|-h)
+        echo "Uso: scripts/tarantulin.sh monitorizar [--una-vez]"
+        return 0
+        ;;
+      *)
+        echo "Argumento no reconocido para monitorizar: $1. Usa --una-vez para una sola lectura." >&2
+        return 2
+        ;;
+    esac
+  done
   mkdir -p "${LOGS_DIR}"
   while true; do
-    clear
+    clear 2>/dev/null || true
     printf '%s\n' "+==============================================================================+"
     printf '%s\n' "| TARANTULIN MJX/JAX PPO - MONITOR                                             |"
     printf '%s\n' "+==============================================================================+"
@@ -1418,18 +1784,23 @@ monitorizar() {
     fi
     printf '%s\n' "+------------------------------------------------------------------------------+"
     printf 'Compute: '
-    if tarantulin_has_nvidia; then
+    monitor_profile="$(tarantulin_resolve_accelerator 2>/dev/null || printf '%s' invalido)"
+    if [[ "${monitor_profile}" == "nvidia" ]] && tarantulin_has_nvidia; then
       nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>/dev/null |
         awk -F ', ' '{printf "%s | util %s%% | VRAM %s/%s MiB | %s C\n", $1, $2, $3, $4, $5}'
-    elif tarantulin_has_amd_rocm; then
-      printf 'AMD ROCm (telemetria termica no disponible en este monitorizador)\n'
+    elif [[ "${monitor_profile}" == "cpu" ]]; then
+      if tarantulin_has_nvidia || tarantulin_has_amd_rocm; then
+        printf 'CPU (hay una GPU visible, pero este runtime no la esta utilizando)\n'
+      else
+        printf 'CPU\n'
+      fi
     else
-      printf 'CPU\n'
+      printf 'perfil %s no disponible\n' "${monitor_profile}"
     fi
     printf 'RAM: '
     free -h | awk '/Mem:/ {printf "mem %s/%s | avail %s  ", $3, $2, $7} /Swap:/ {printf "swap %s/%s\n", $3, $2}'
     printf '%s\n' "+------------------------------------------------------------------------------+"
-    local run_info run_dir pid latest_metrics
+    local run_info run_dir pid latest_metrics guard_pid guard_candidate
     run_info="$(ejecucion_activa_actual_con_pid || true)"
     if [[ -n "${run_info}" ]]; then
       run_dir="$(printf '%s\n' "${run_info}" | awk -F '\t' 'NR == 1 {print $1}')"
@@ -1458,7 +1829,7 @@ PY
       printf 'Ejecucion: %s\n' "${run_dir}"
       printf 'PID: %s | Estado: ' "${pid:-n/a}"
       if pid_activo "${pid}"; then
-        printf 'activo | vivo %s\n' "$(ps -p "${pid}" -o etime= | awk '{$1=$1; print}')"
+        printf 'activo | vivo %s\n' "$(ps -p "${pid}" -o etime= 2>/dev/null | awk '{$1=$1; print}')"
       else
         printf 'sin proceso activo\n'
       fi
@@ -1473,7 +1844,13 @@ PY
     fi
     printf '%s\n' "+------------------------------------------------------------------------------+"
     if [[ -n "${run_dir}" ]]; then
-      mostrar_detalles_ejecucion "${run_dir}" "${pid}"
+      guard_pid=""
+      guard_candidate="$(tarantulin_read_safe_pid_file "${run_dir}/proteccion_termica.pid" 2>/dev/null || true)"
+      if [[ -n "${pid}" ]] && proceso_proteccion_corresponde_ejecucion \
+          "${guard_candidate}" "${pid}" "${run_dir}"; then
+        guard_pid="${guard_candidate}"
+      fi
+      mostrar_detalles_ejecucion "${run_dir}" "${pid}" "${guard_pid}"
       local ckpt
       ckpt="$(ultimo_checkpoint "${run_dir}")"
       printf '\n+------------------------------------------------------------------------------+\n'
@@ -1507,6 +1884,9 @@ PY
         tail -10 || true
     fi
     printf '%s\n' "+==============================================================================+"
+    if (( una_vez == 1 )); then
+      break
+    fi
     printf '%s\n' "Ctrl+C para salir. Refresco cada 2s."
     sleep 2
   done
@@ -1689,8 +2069,8 @@ Uso:
    [--intervalo-log-recompensas 5] [--training-metrics-steps N]
    [--metricas-recompensa-entrenamiento] [--metricas-fisicas-completas]
    [--curriculo-penalizaciones 0.0-1.0]
-  scripts/tarantulin.sh monitorizar
-  scripts/tarantulin.sh parar
+  scripts/tarantulin.sh monitorizar [--una-vez]
+  scripts/tarantulin.sh parar [--ejecucion NOMBRE] [--solo-entrenamiento]
   scripts/tarantulin.sh reiniciar-checkpoint
   scripts/tarantulin.sh check-swap
   scripts/tarantulin.sh iniciar-proteccion-termica

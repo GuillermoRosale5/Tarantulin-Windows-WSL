@@ -21,6 +21,8 @@ jobs:
         run: find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: Comprobar sintaxis Python
         run: python -m compileall -q tarantulin scripts
+      - name: Comprobar regresiones herméticas
+        run: python -m unittest discover -s tests -p 'test_*.py'
       - name: Comprobar la estructura del repositorio
         run: |
           test "$(tr -d '\r\n' < .tarantulin/source.marker)" = tarantulin-windows-source-v1
@@ -65,3 +67,6 @@ jobs:
             $errors += $parseErrors
           }
           if ($errors.Count) { $errors | Format-List; exit 1 }
+      - name: Comprobar instalador y lanzadores de Windows
+        shell: powershell
+        run: .\tests\test_windows_packaging.ps1

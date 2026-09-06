@@ -26,7 +26,6 @@ trap cleanup EXIT
 source "${SOURCE_ROOT}/scripts/tarantulin.sh"
 
 REPO_ROOT="${TEST_ROOT}/workspace"
-PROJECT_DIR="${REPO_ROOT}"
 LOGS_DIR="${REPO_ROOT}/logs_tarantulin_mjx"
 LAST_RUN="${LOGS_DIR}/ultima_run.txt"
 RUN_DIR="${LOGS_DIR}/run-identidad"
@@ -43,7 +42,7 @@ printf '%s\n' "${decoy_pid}" > "${RUN_DIR}/entrenamiento.pid"
 printf '%s\n' "${decoy_start}" > "${RUN_DIR}/entrenamiento.starttime"
 parar_entrenamiento > "${TEST_ROOT}/stale-stop.log" 2>&1
 kill -0 "${decoy_pid}"
-grep -q 'No hay entrenamiento activo con identidad validada' "${TEST_ROOT}/stale-stop.log"
+grep -q 'No hay PID guardado ni proceso de TARANTULIN activo' "${TEST_ROOT}/stale-stop.log"
 
 # Incluso con comando/cwd correctos, un starttime distinto simula PID reciclado
 # y debe provocar rechazo sin senal.
@@ -103,5 +102,38 @@ printf '%s\n' "${guard_decoy_start}" > "${RUN_DIR}/proteccion_termica.starttime"
 parar_entrenamiento > "${TEST_ROOT}/guard-stop.log" 2>&1
 kill -0 "${guard_decoy_pid}"
 grep -q 'no corresponde a la proteccion' "${TEST_ROOT}/guard-stop.log"
+
+# La identidad del supervisor incluye el nombre exacto de ejecucion. Otro
+# curriculo con el mismo script no se puede confundir con este.
+mkdir -p "${REPO_ROOT}/scripts"
+printf '%s\n' '#!/usr/bin/env bash' 'sleep 60' > \
+  "${REPO_ROOT}/scripts/curriculo_automatico_tarantulin.sh"
+chmod +x "${REPO_ROOT}/scripts/curriculo_automatico_tarantulin.sh"
+(
+  cd "${REPO_ROOT}"
+  exec bash "${REPO_ROOT}/scripts/curriculo_automatico_tarantulin.sh" \
+    --nombre-ejecucion "$(basename -- "${RUN_DIR}")"
+) &
+curriculum_pid=$!
+curriculum_start="$(tarantulin_process_starttime "${curriculum_pid}")"
+spawned_identities+=("${curriculum_pid}:${curriculum_start}")
+tarantulin_curriculum_process_matches \
+  "${curriculum_pid}" "${REPO_ROOT}/scripts/curriculo_automatico_tarantulin.sh" \
+  "${RUN_DIR}" "${curriculum_start}"
+
+(
+  cd "${REPO_ROOT}"
+  exec bash "${REPO_ROOT}/scripts/curriculo_automatico_tarantulin.sh" \
+    --nombre-ejecucion otra-ejecucion
+) &
+curriculum_decoy_pid=$!
+curriculum_decoy_start="$(tarantulin_process_starttime "${curriculum_decoy_pid}")"
+spawned_identities+=("${curriculum_decoy_pid}:${curriculum_decoy_start}")
+if tarantulin_curriculum_process_matches \
+  "${curriculum_decoy_pid}" "${REPO_ROOT}/scripts/curriculo_automatico_tarantulin.sh" \
+  "${RUN_DIR}" "${curriculum_decoy_start}"; then
+  echo "ERROR: se acepto el supervisor de otra ejecucion" >&2
+  exit 1
+fi
 
 echo "PROCESS_IDENTITY_TESTS_OK"

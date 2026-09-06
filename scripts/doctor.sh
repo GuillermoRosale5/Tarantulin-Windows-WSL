@@ -12,6 +12,7 @@ export PATH="${HOME}/.local/bin:${PATH}"
 
 failures=0
 ok() { printf '[OK]   %s\n' "$*"; }
+info() { printf '[INFO] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*"; failures=$((failures + 1)); }
 
@@ -29,7 +30,11 @@ if [[ -r /etc/os-release ]]; then
   # shellcheck disable=SC1091
   source /etc/os-release
   printf 'Sistema: %s\n' "${PRETTY_NAME:-desconocido}"
-  [[ "${ID:-}" == ubuntu ]] && ok "Distribucion Ubuntu" || warn "Distribucion no validada para este repositorio"
+  if [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "24.04" ]]; then
+    ok "Distribucion Ubuntu 24.04"
+  else
+    fail "Esta variante necesita Ubuntu 24.04 bajo WSL"
+  fi
 fi
 
 requested="$(tarantulin_requested_accelerator 2>/dev/null)" || requested="invalido"
@@ -38,7 +43,7 @@ printf 'Acelerador solicitado: %s\n' "${requested}"
 printf 'Acelerador resuelto  : %s\n' "${resolved}"
 if tarantulin_accelerator_preflight "${resolved}"; then ok "Preflight del acelerador"; else fail "Preflight del acelerador"; fi
 
-for command in bash git curl python3 rsync; do
+for command in bash git curl python3 rsync flock; do
   if command -v "${command}" >/dev/null 2>&1; then ok "Comando ${command}"; else fail "Falta ${command}"; fi
 done
 if command -v uv >/dev/null 2>&1; then
@@ -57,9 +62,15 @@ if tarantulin_has_nvidia; then
   ok "NVIDIA visible desde WSL"
   nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>/dev/null | sed 's/^/       /'
 else
-  warn "nvidia-smi no expone GPU"
+  if [[ "${resolved}" == "nvidia" ]]; then
+    fail "nvidia-smi no expone la GPU exigida"
+  else
+    info "NVIDIA no es necesaria para el perfil ${resolved}"
+  fi
 fi
-if tarantulin_has_amd_rocm; then ok "AMD ROCm visible (experimental en WSL)"; else warn "rocminfo no expone GPU AMD"; fi
+if tarantulin_has_amd_rocm; then
+  warn "ROCm detecta hardware AMD, pero JAX/MJX con GPU AMD no esta soportado por esta variante WSL2"
+fi
 
 if [[ -f "${REPO_ROOT}/pyproject.toml" && -f "${REPO_ROOT}/uv.lock" ]] && grep -q "${PLAYGROUND_COMMIT}" "${REPO_ROOT}/uv.lock"; then
   ok "MuJoCo Playground fijado en uv.lock (${PLAYGROUND_COMMIT:0:12})"

@@ -17,7 +17,6 @@ trap cleanup EXIT
 source "${SOURCE_ROOT}/scripts/tarantulin.sh"
 
 REPO_ROOT="${TEST_ROOT}/workspace"
-PROJECT_DIR="${REPO_ROOT}"
 LOGS_DIR="${REPO_ROOT}/logs_tarantulin_mjx"
 LAST_RUN="${LOGS_DIR}/ultima_run.txt"
 mkdir -p "${LOGS_DIR}" "${TEST_ROOT}/outside"

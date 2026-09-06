@@ -140,8 +140,15 @@ fi
 
 cmd=(./scripts/tarantulin.sh entrenar \
   --segundo-plano \
-  --setup \
   --desde-cero)
+
+# El instalador Windows ya deja el entorno preparado. Una shell abierta desde
+# TARANTULIN.cmd mantiene un bloqueo compartido y no debe intentar modificar el
+# entorno con uv mientras lo usa. Fuera de ese runtime se conserva la preparacion
+# automatica que tenia este lanzador.
+if [[ -z "${TARANTULIN_RUNTIME_LOCK_HELD:-}" ]]; then
+  cmd+=(--setup)
+fi
 
 if (( FASE_RECOMPENSA_PASADA == 0 )); then
   cmd+=(--fase-recompensa "${FASE_RECOMPENSA:-1}")

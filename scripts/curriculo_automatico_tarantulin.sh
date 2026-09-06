@@ -4,6 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 LOGS_DIR="${REPO_ROOT}/logs_tarantulin_mjx"
+# Se carga como biblioteca: aporta validacion de rutas e identidad de procesos,
+# pero no ejecuta main cuando BASH_SOURCE es distinto de $0.
+# shellcheck source=tarantulin.sh
+source "${SCRIPT_DIR}/tarantulin.sh"
 
 PASOS_TOTALES=200000000
 PASOS_BLOQUE=5000000
@@ -13,6 +17,20 @@ FASE="${TARANTULIN_FASE_RECOMPENSA:-1}"
 CONFIGURAR_PRIMERO=1
 REINICIAR_PRIMERO=1
 PARAR_AL_SOLICITAR=1
+
+# La identidad del supervisor debe quedar tambien en /proc/PID/cmdline. Si el
+# usuario no da un nombre, reiniciamos el mismo proceso una sola vez incluyendo
+# el nombre generado de forma explicita.
+nombre_ejecucion_argumentado=0
+for argumento_original in "$@"; do
+  case "${argumento_original}" in
+    --nombre-ejecucion|--nombre-ejecucion=*) nombre_ejecucion_argumentado=1 ;;
+  esac
+done
+if (( nombre_ejecucion_argumentado == 0 )); then
+  exec bash "$0" --nombre-ejecucion "${NOMBRE_EJECUCION}" "$@"
+fi
+unset nombre_ejecucion_argumentado argumento_original
 
 usage() {
   cat <<'EOF'
@@ -60,6 +78,14 @@ validar_nombre_ejecucion() {
   fi
 }
 
+validar_entero_positivo() {
+  local nombre="$1" valor="$2"
+  if [[ ! "${valor}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${nombre} debe ser un entero positivo: ${valor:-<vacio>}." >&2
+    exit 1
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --perfil-ppo) PERFIL_PPO="$2"; shift 2 ;;
@@ -83,6 +109,16 @@ done
 validar_perfil "${PERFIL_PPO}"
 validar_fase "${FASE}"
 validar_nombre_ejecucion "${NOMBRE_EJECUCION}"
+validar_entero_positivo "--pasos-totales" "${PASOS_TOTALES}"
+validar_entero_positivo "--pasos-por-bloque" "${PASOS_BLOQUE}"
+
+if [[ -n "${TARANTULIN_RUNTIME_LOCK_HELD:-}" && "${CONFIGURAR_PRIMERO}" == "1" ]]; then
+  if [[ ! -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    echo "El runtime no tiene entorno Python. Cierra esta terminal y repite INSTALAR_WINDOWS.cmd." >&2
+    exit 1
+  fi
+  CONFIGURAR_PRIMERO=0
+fi
 
 DIRECTORIO_EJECUCION="${LOGS_DIR}/${NOMBRE_EJECUCION}"
 repo_real="$(realpath -e "${REPO_ROOT}")"
@@ -95,6 +131,10 @@ if [[ -L "${LOGS_DIR}" || "${logs_real}" != "${repo_real}/logs_tarantulin_mjx" |
 fi
 ARCHIVO_SOLICITUD="${DIRECTORIO_EJECUCION}/fase_solicitada.txt"
 ARCHIVO_ESTADO="${DIRECTORIO_EJECUCION}/curriculo_automatico_estado.json"
+ARCHIVO_PID_SUPERVISOR="${DIRECTORIO_EJECUCION}/curriculo_automatico.pid"
+ARCHIVO_START_SUPERVISOR="${DIRECTORIO_EJECUCION}/curriculo_automatico.starttime"
+ARCHIVO_PARADA_TOTAL="${DIRECTORIO_EJECUCION}/parada_total_solicitada"
+ARCHIVO_PARADA_ENTRENAMIENTO="${DIRECTORIO_EJECUCION}/parada_entrenamiento_solicitada"
 mkdir -p "${DIRECTORIO_EJECUCION}"
 
 nombre_fase() {
@@ -107,17 +147,40 @@ nombre_fase() {
 
 escribir_estado() {
   local estado="$1"
-  python3 - "$ARCHIVO_ESTADO" "$estado" "$NOMBRE_EJECUCION" "$DIRECTORIO_EJECUCION" "$FASE" "$PASOS_TOTALES" "$PASOS_BLOQUE" "$PASOS_COMPLETADOS" "$PERFIL_PPO" <<'PY'
+  local detalle="${2:-}"
+  python3 - "$ARCHIVO_ESTADO" "$estado" "$NOMBRE_EJECUCION" "$DIRECTORIO_EJECUCION" "$FASE" "$PASOS_TOTALES" "$PASOS_BLOQUE" "$PASOS_COMPLETADOS" "$PERFIL_PPO" "$detalle" <<'PY'
 import json
+import os
 import sys
+import tempfile
 from datetime import datetime
+from pathlib import Path
 
-ruta, estado, nombre_ejecucion, directorio_ejecucion, fase, total, bloque, completados, perfil = sys.argv[1:]
-payload = {
+ruta, estado, nombre_ejecucion, directorio_ejecucion, fase, total, bloque, completados, perfil, detalle = sys.argv[1:]
+ruta = Path(ruta)
+if ruta.is_symlink():
+    raise SystemExit(f"El estado curricular no puede ser un enlace simbolico: {ruta}")
+payload = {}
+if ruta.is_file():
+    try:
+        anterior = json.loads(ruta.read_text(encoding="utf-8"))
+        if isinstance(anterior, dict):
+            payload.update(anterior)
+    except (OSError, ValueError, TypeError):
+        pass
+if estado == "iniciando":
+    payload.pop("detalle", None)
+payload.pop("pasos_lanzados_por_supervisor", None)
+payload.update({
     "estado": estado,
     "timestamp": datetime.now().isoformat(timespec="seconds"),
-    "run_name": nombre_ejecucion,
-    "run_dir": directorio_ejecucion,
+    "pid_supervisor": (
+        None
+        if estado in {"terminado", "cancelado", "error"}
+        else int(os.environ.get("TARANTULIN_CURRICULUM_PID", "0") or 0)
+    ),
+    "nombre_ejecucion": nombre_ejecucion,
+    "directorio_ejecucion": directorio_ejecucion,
     "fase_actual": int(fase),
     "fase_nombre": {
         "1": "mantener_pose_xml",
@@ -125,12 +188,25 @@ payload = {
         "3": "recuperar_desde_caida",
     }.get(str(fase), "desconocida"),
     "perfil_ppo": perfil,
-    "total_steps_objetivo": int(total),
-    "chunk_steps": int(bloque),
-    "steps_lanzados_por_supervisor": int(completados),
-}
-with open(ruta, "w", encoding="utf-8") as f:
-    json.dump(payload, f, indent=2, sort_keys=True)
+    "pasos_totales_objetivo": int(total),
+    "pasos_por_bloque": int(bloque),
+    "pasos_confirmados_por_supervisor": int(completados),
+})
+if detalle:
+    payload["detalle"] = detalle
+descriptor, nombre_temporal = tempfile.mkstemp(
+    prefix=f".{ruta.name}.", suffix=".tmp", dir=ruta.parent
+)
+temporal = Path(nombre_temporal)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as archivo:
+        json.dump(payload, archivo, indent=2, sort_keys=True)
+        archivo.write("\n")
+        archivo.flush()
+        os.fsync(archivo.fileno())
+    os.replace(temporal, ruta)
+finally:
+    temporal.unlink(missing_ok=True)
 PY
 }
 
@@ -147,28 +223,90 @@ leer_fase_solicitada() {
   esac
 }
 
-esperar_fin_entrenamiento_o_solicitud() {
-  local archivo_pid="${DIRECTORIO_EJECUCION}/entrenamiento.pid"
-  local pid=""
-  for _ in $(seq 1 60); do
-    if [[ -f "${archivo_pid}" ]]; then
-      pid="$(cat "${archivo_pid}")"
-      break
-    fi
-    sleep 1
-  done
-  if [[ -z "${pid}" ]]; then
-    echo "No se encontro entrenamiento.pid; revisa ${DIRECTORIO_EJECUCION}/entrenamiento.log" >&2
-    return 1
-  fi
+estado_entrenamiento() {
+  python3 - "${DIRECTORIO_EJECUCION}/estado.json" <<'PY'
+import json
+import sys
+from pathlib import Path
 
-  while kill -0 "${pid}" >/dev/null 2>&1; do
-    if [[ -f "${ARCHIVO_SOLICITUD}" && "${PARAR_AL_SOLICITAR}" == "1" ]]; then
-      echo "Solicitud manual detectada. Parando el bloque actual para cambiar de fase..."
-      "${SCRIPT_DIR}/tarantulin.sh" parar || true
-      break
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, ValueError, TypeError):
+    print("desconocido")
+else:
+    print(data.get("estado", "desconocido"))
+PY
+}
+
+contar_filas_progreso() {
+  python3 - "${DIRECTORIO_EJECUCION}/progreso.csv" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    print(0)
+else:
+    with path.open(newline="", encoding="utf-8") as handle:
+        print(sum(1 for _ in csv.DictReader(handle)))
+PY
+}
+
+pasos_confirmados_desde_fila() {
+  local primera_fila="$1"
+  python3 - "${DIRECTORIO_EJECUCION}/progreso.csv" "${primera_fila}" <<'PY'
+import csv
+import math
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+offset = int(sys.argv[2])
+if not path.is_file():
+    print(0)
+    raise SystemExit
+with path.open(newline="", encoding="utf-8") as handle:
+    rows = list(csv.DictReader(handle))[offset:]
+steps = []
+for row in rows:
+    try:
+        value = float(row.get("num_steps", ""))
+    except (TypeError, ValueError):
+        continue
+    if math.isfinite(value) and value >= 0:
+        steps.append(int(value))
+print(max(steps, default=0))
+PY
+}
+
+esperar_fin_entrenamiento_o_solicitud() {
+  local pid="" launcher_pid="" parada_por_fase_enviada=0
+  while :; do
+    if [[ -f "${ARCHIVO_PARADA_TOTAL}" ]]; then
+      echo "Parada total detectada; no se lanzara ningun bloque nuevo."
+      "${SCRIPT_DIR}/tarantulin.sh" parar \
+        --solo-entrenamiento --ejecucion "${NOMBRE_EJECUCION}" || true
+      return 130
     fi
-    sleep 30
+    if [[ -f "${ARCHIVO_SOLICITUD}" && "${PARAR_AL_SOLICITAR}" == "1" &&
+          "${parada_por_fase_enviada}" == "0" ]]; then
+      echo "Solicitud manual detectada. Parando el bloque actual para cambiar de fase..."
+      "${SCRIPT_DIR}/tarantulin.sh" parar \
+        --solo-entrenamiento --ejecucion "${NOMBRE_EJECUCION}" || true
+      parada_por_fase_enviada=1
+    fi
+
+    pid="$(tarantulin_read_safe_pid_file "${DIRECTORIO_EJECUCION}/entrenamiento.pid" 2>/dev/null || true)"
+    launcher_pid="$(tarantulin_read_safe_pid_file "${DIRECTORIO_EJECUCION}/lanzador.pid" 2>/dev/null || true)"
+    if ! proceso_entrenamiento_corresponde_ejecucion \
+        "${pid}" "${DIRECTORIO_EJECUCION}" &&
+        ! proceso_lanzador_corresponde_ejecucion \
+          "${launcher_pid}" "${DIRECTORIO_EJECUCION}"; then
+      return 0
+    fi
+    sleep 0.5
   done
 }
 
@@ -188,7 +326,10 @@ if phase >= 3 or not csv_path.exists():
 rows = []
 with csv_path.open(newline="", encoding="utf-8") as f:
     for row in csv.DictReader(f):
-        if row.get("source") == "eval":
+        if (
+            row.get("source") == "eval"
+            and row.get("fase_curriculum_recompensa") == str(phase)
+        ):
             rows.append(row)
 rows = rows[-6:]
 if len(rows) < 3:
@@ -249,6 +390,60 @@ PY
 
 PASOS_COMPLETADOS=0
 PRIMER_BLOQUE=1
+BLOQUE_ACTIVO=0
+PARADA_RECIBIDA=0
+ESTADO_FINAL=""
+export TARANTULIN_CURRICULUM_PID="$$"
+
+pid_supervisor_anterior="$(tarantulin_read_safe_pid_file "${ARCHIVO_PID_SUPERVISOR}" 2>/dev/null || true)"
+if proceso_curriculo_corresponde_ejecucion \
+    "${pid_supervisor_anterior}" "${DIRECTORIO_EJECUCION}"; then
+  echo "Ya existe un supervisor curricular activo para esta ejecucion: PID ${pid_supervisor_anterior}." >&2
+  exit 1
+fi
+rm -f "${ARCHIVO_PID_SUPERVISOR}" "${ARCHIVO_START_SUPERVISOR}" \
+  "${ARCHIVO_PARADA_TOTAL}" "${ARCHIVO_PARADA_ENTRENAMIENTO}"
+escribir_inicio_proceso "$$" "${ARCHIVO_START_SUPERVISOR}"
+pid_supervisor_temporal="$(mktemp "${DIRECTORIO_EJECUCION}/.curriculo_automatico.pid.XXXXXX")"
+printf '%s\n' "$$" > "${pid_supervisor_temporal}"
+mv -f -- "${pid_supervisor_temporal}" "${ARCHIVO_PID_SUPERVISOR}"
+
+solicitar_parada_supervisor() {
+  local nombre_senal="$1" temporal
+  PARADA_RECIBIDA=1
+  if [[ ! -e "${ARCHIVO_PARADA_TOTAL}" && ! -L "${ARCHIVO_PARADA_TOTAL}" ]]; then
+    temporal="$(mktemp "${DIRECTORIO_EJECUCION}/.parada_total.XXXXXX")"
+    printf '%s\t%s\n' "$(date --iso-8601=seconds)" "${nombre_senal}" > "${temporal}"
+    mv -f -- "${temporal}" "${ARCHIVO_PARADA_TOTAL}"
+  fi
+  escribir_estado "cancelando" "senal ${nombre_senal} recibida"
+  exit 130
+}
+
+finalizar_supervisor() {
+  local codigo_salida=$? pid_guardado
+  trap - EXIT TERM INT HUP
+  if (( BLOQUE_ACTIVO == 1 )); then
+    "${SCRIPT_DIR}/tarantulin.sh" parar \
+      --solo-entrenamiento --ejecucion "${NOMBRE_EJECUCION}" || true
+  fi
+  if (( PARADA_RECIBIDA == 1 )) || [[ -f "${ARCHIVO_PARADA_TOTAL}" ]]; then
+    escribir_estado "cancelado" "supervisor y entrenamiento detenidos"
+  elif [[ "${ESTADO_FINAL}" != "terminado" && "${codigo_salida}" -ne 0 ]]; then
+    escribir_estado "error" "el supervisor termino con codigo ${codigo_salida}"
+  fi
+  pid_guardado="$(tarantulin_read_safe_pid_file "${ARCHIVO_PID_SUPERVISOR}" 2>/dev/null || true)"
+  if [[ "${pid_guardado}" == "$$" ]]; then
+    rm -f "${ARCHIVO_PID_SUPERVISOR}" "${ARCHIVO_START_SUPERVISOR}"
+  fi
+  exit "${codigo_salida}"
+}
+
+trap finalizar_supervisor EXIT
+trap 'solicitar_parada_supervisor SIGTERM' TERM
+trap 'solicitar_parada_supervisor SIGINT' INT
+trap 'solicitar_parada_supervisor SIGHUP' HUP
+
 escribir_estado "iniciando"
 
 cat <<EOF
@@ -265,6 +460,10 @@ Puedes cambiar fase con:
 EOF
 
 while (( PASOS_COMPLETADOS < PASOS_TOTALES )); do
+  if [[ -f "${ARCHIVO_PARADA_TOTAL}" ]]; then
+    PARADA_RECIBIDA=1
+    exit 130
+  fi
   if solicitada="$(leer_fase_solicitada)"; then
     FASE="${solicitada}"
     echo "Cambio manual aplicado antes del bloque: fase ${FASE} - $(nombre_fase "${FASE}")"
@@ -278,7 +477,9 @@ while (( PASOS_COMPLETADOS < PASOS_TOTALES )); do
 
   echo ""
   echo "=== Bloque de la fase ${FASE} - $(nombre_fase "${FASE}") | ${pasos_bloque_actual} pasos ==="
-  escribir_estado "entrenando_chunk"
+  escribir_estado "entrenando_bloque"
+  filas_progreso_antes="$(contar_filas_progreso)"
+  rm -f "${ARCHIVO_PARADA_ENTRENAMIENTO}"
 
   train_args=(
     entrenar
@@ -297,17 +498,53 @@ while (( PASOS_COMPLETADOS < PASOS_TOTALES )); do
     train_args+=(--desde-cero)
   fi
 
-  "${SCRIPT_DIR}/tarantulin.sh" "${train_args[@]}"
+  BLOQUE_ACTIVO=1
+  TARANTULIN_CURRICULUM_CHILD=1 \
+    "${SCRIPT_DIR}/tarantulin.sh" "${train_args[@]}"
   PRIMER_BLOQUE=0
+  set +e
   esperar_fin_entrenamiento_o_solicitud
-  PASOS_COMPLETADOS=$(( PASOS_COMPLETADOS + pasos_bloque_actual ))
-  escribir_estado "chunk_terminado"
+  estado_espera=$?
+  set -e
+  pasos_confirmados_bloque="$(pasos_confirmados_desde_fila "${filas_progreso_antes}")"
+  PASOS_COMPLETADOS=$(( PASOS_COMPLETADOS + pasos_confirmados_bloque ))
+  BLOQUE_ACTIVO=0
+  estado_bloque="$(estado_entrenamiento)"
+
+  if [[ "${estado_espera}" -eq 130 || -f "${ARCHIVO_PARADA_TOTAL}" ]]; then
+    PARADA_RECIBIDA=1
+    exit 130
+  fi
 
   if solicitada="$(leer_fase_solicitada)"; then
+    case "${estado_bloque}" in
+      terminado|cancelado) ;;
+      *)
+        echo "El bloque no termino de forma recuperable: estado ${estado_bloque}." >&2
+        exit 1
+        ;;
+    esac
     FASE="${solicitada}"
-    echo "Cambio manual aplicado: fase ${FASE} - $(nombre_fase "${FASE}")"
+    rm -f "${ARCHIVO_PARADA_ENTRENAMIENTO}"
+    escribir_estado \
+      "bloque_cancelado_por_cambio_de_fase" \
+      "${pasos_confirmados_bloque} pasos confirmados antes del cambio"
+    echo "Cambio manual aplicado: fase ${FASE} - $(nombre_fase "${FASE}"); ${pasos_confirmados_bloque} pasos confirmados."
     continue
   fi
+
+  if [[ "${estado_bloque}" != "terminado" ]]; then
+    echo "El entrenamiento termino con estado ${estado_bloque}; el supervisor no relanzara otro bloque." >&2
+    exit 1
+  fi
+  if (( pasos_confirmados_bloque <= 0 )); then
+    echo "El bloque figura como terminado, pero no registro ningun paso positivo; no se contabiliza ni se relanza." >&2
+    exit 1
+  fi
+  rm -f "${ARCHIVO_PARADA_ENTRENAMIENTO}"
+  escribir_estado \
+    "bloque_terminado" \
+    "${pasos_confirmados_bloque} pasos confirmados en el ultimo bloque"
 
   if fase_lista_para_avanzar "${FASE}"; then
     if (( FASE < 3 )); then
@@ -320,4 +557,5 @@ while (( PASOS_COMPLETADOS < PASOS_TOTALES )); do
 done
 
 escribir_estado "terminado"
+ESTADO_FINAL="terminado"
 echo "Curriculo automatico terminado: ${DIRECTORIO_EJECUCION}"

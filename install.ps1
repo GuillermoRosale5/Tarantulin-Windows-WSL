@@ -7,8 +7,8 @@ param(
   [switch]$NoSetup,
   [switch]$SyncOnly,
   [switch]$SkipSystemPackages,
-  [switch]$SkipGpuCheck,
-  [switch]$EnableExperimentalAmdWsl
+  [switch]$SkipWslUpdate,
+  [switch]$SkipGpuCheck
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,8 +19,8 @@ $forward = @{
   NoSetup = $NoSetup
   SyncOnly = $SyncOnly
   SkipSystemPackages = $SkipSystemPackages
+  SkipWslUpdate = $SkipWslUpdate
   SkipGpuCheck = $SkipGpuCheck
-  EnableExperimentalAmdWsl = $EnableExperimentalAmdWsl
 }
 if ($Distro) { $forward.Distro = $Distro }
 if ($RuntimePath) { $forward.RuntimePath = $RuntimePath }

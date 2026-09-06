@@ -37,6 +37,15 @@ if [[ "$(dirname -- "${RUN_DIR}")" != "${LOGS_DIR}" ]]; then
   exit 1
 fi
 
+limpiar_identidad_proteccion() {
+  local pid_guardado
+  pid_guardado="$(tarantulin_read_safe_pid_file "${RUN_DIR}/proteccion_termica.pid" 2>/dev/null || true)"
+  if [[ "${pid_guardado}" == "$$" ]]; then
+    rm -f -- "${RUN_DIR}/proteccion_termica.pid" "${RUN_DIR}/proteccion_termica.starttime"
+  fi
+}
+trap limpiar_identidad_proteccion EXIT
+
 training_identity_valid() {
   tarantulin_training_process_matches \
     "${TRAIN_PID}" "${REPO_ROOT}" "${LOGS_DIR}" "${RUN_DIR}" "${TRAIN_STARTTIME}"

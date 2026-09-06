@@ -140,9 +140,7 @@ PLOT_SKIP_COLUMNS = {
     "percent",
     "source",
     "eval_episode_reward",
-    "eval_episode_reward",
     "eval_episode_length",
-    "eval_reward_per_step",
     "eval_reward_per_step",
     "wall_steps_per_second",
     "steps_per_second",
@@ -392,7 +390,9 @@ def _serie(
         None
         if valor_recompensa is None or valor_penalizacion is None
         else valor_recompensa - valor_penalizacion
-        for valor_recompensa, valor_penalizacion in zip(valores_recompensa, valores_penalizacion)
+        for valor_recompensa, valor_penalizacion in zip(
+            valores_recompensa, valores_penalizacion, strict=True
+        )
     ]
     return _quizas_escalar_serie_recompensa(rows, column, values, unidades_recompensa)
   values = [_a_numero(_valor_columna(row, column)) for row in rows]

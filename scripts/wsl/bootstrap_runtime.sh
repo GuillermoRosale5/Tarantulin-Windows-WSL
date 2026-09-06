@@ -10,7 +10,6 @@ RUN_SETUP=1
 SYNC_ONLY=0
 INSTALL_SYSTEM_PACKAGES=1
 SKIP_GPU_CHECK=0
-ENABLE_EXPERIMENTAL_AMD_WSL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -22,7 +21,6 @@ while [[ $# -gt 0 ]]; do
     --sync-only) SYNC_ONLY=1; RUN_SETUP=0; INSTALL_SYSTEM_PACKAGES=0; shift ;;
     --skip-system-packages) INSTALL_SYSTEM_PACKAGES=0; shift ;;
     --skip-gpu-check) SKIP_GPU_CHECK=1; shift ;;
-    --enable-experimental-amd-wsl) ENABLE_EXPERIMENTAL_AMD_WSL=1; shift ;;
     *) echo "Argumento no reconocido: $1" >&2; exit 2 ;;
   esac
 done
@@ -36,16 +34,24 @@ if (( INSTALL_SYSTEM_PACKAGES == 1 )); then
   [[ -r /etc/os-release ]] || { echo "No se puede identificar la distribucion Linux." >&2; exit 1; }
   # shellcheck disable=SC1091
   source /etc/os-release
-  [[ "${ID:-}" == "ubuntu" ]] || {
-    echo "La variante Windows esta validada con Ubuntu bajo WSL; detectado ${PRETTY_NAME:-desconocido}." >&2
+  [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "24.04" ]] || {
+    echo "La variante Windows esta validada con Ubuntu 24.04 bajo WSL; detectado ${PRETTY_NAME:-desconocido}." >&2
     exit 1
   }
   command -v sudo >/dev/null 2>&1 || { echo "Falta sudo en WSL." >&2; exit 1; }
   echo "==> Instalando dependencias base en ${PRETTY_NAME}"
-  sudo apt-get update
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  echo "apt puede tardar varios minutos; mientras muestre actividad no esta bloqueado."
+  apt_options=(
+    -o Acquire::Retries=3
+    -o Acquire::http::Timeout=30
+    -o Acquire::https::Timeout=30
+    -o DPkg::Lock::Timeout=120
+  )
+  sudo -v
+  sudo apt-get "${apt_options[@]}" update
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y \
     ca-certificates curl git rsync build-essential python3 python3-venv python3-pip \
-    pkg-config libgl1 libegl1 libglfw3 libglew2.2 pciutils
+    pkg-config libgl1 libegl1 libglfw3 libglew2.2 pciutils util-linux
 fi
 
 bash "${SCRIPT_DIR}/sync_runtime.sh" \
@@ -59,32 +65,42 @@ if (( SYNC_ONLY == 1 )); then
 fi
 RUNTIME_ROOT="$(tarantulin_resolve_runtime "${RUNTIME_REQUESTED}")"
 workspace="${RUNTIME_ROOT}/workspace"
+command -v flock >/dev/null 2>&1 || {
+  echo "Falta flock (paquete util-linux). Repite sin -SkipSystemPackages." >&2
+  exit 1
+}
+exec {RUNTIME_LOCK_FD}> "${RUNTIME_ROOT}/runtime.lock"
+if ! flock --exclusive --nonblock "${RUNTIME_LOCK_FD}"; then
+  echo "El runtime esta en uso; detiene el entrenamiento, visor o terminal antes de instalar." >&2
+  exit 1
+fi
+export TARANTULIN_RUNTIME_ROOT="${RUNTIME_ROOT}"
+export TARANTULIN_RUNTIME_LOCK_HELD=exclusive
 export TARANTULIN_BACKEND_PROFILE="${ACCELERATOR}"
-if (( ENABLE_EXPERIMENTAL_AMD_WSL == 1 )); then export TARANTULIN_ENABLE_EXPERIMENTAL_AMD_WSL=1; fi
 if (( SKIP_GPU_CHECK == 1 )); then export TARANTULIN_SKIP_BACKEND_CHECK=1; fi
 # shellcheck source=../platform.sh
 source "${workspace}/scripts/platform.sh"
 resolved_accelerator="$(tarantulin_resolve_accelerator)"
 case "${resolved_accelerator}" in auto|nvidia|amd|intel|cpu) ;; *) echo "Perfil resuelto no valido." >&2; exit 2 ;; esac
 tarantulin_accelerator_preflight "${resolved_accelerator}"
-profile_tmp="${RUNTIME_ROOT}/accelerator.profile.tmp.$$"
-printf '%s\n' "${resolved_accelerator}" > "${profile_tmp}"
-mv -f "${profile_tmp}" "${RUNTIME_ROOT}/accelerator.profile"
-echo "Perfil persistido para este runtime: ${resolved_accelerator}"
-if [[ "${resolved_accelerator}" == "amd" && "${ENABLE_EXPERIMENTAL_AMD_WSL}" == "1" ]]; then
-  printf '%s\n' 'accepted=amd-wsl-experimental-v1' > "${RUNTIME_ROOT}/amd-wsl-experimental.opt-in"
-else
-  rm -f -- "${RUNTIME_ROOT}/amd-wsl-experimental.opt-in"
-fi
-
 if (( RUN_SETUP == 0 )); then
+  profile_tmp="${RUNTIME_ROOT}/accelerator.profile.tmp.$$"
+  printf '%s\n' "${resolved_accelerator}" > "${profile_tmp}"
+  mv -f "${profile_tmp}" "${RUNTIME_ROOT}/accelerator.profile"
+  rm -f -- "${RUNTIME_ROOT}/amd-wsl-experimental.opt-in"
+  echo "Perfil persistido para este runtime: ${resolved_accelerator}"
   echo "Runtime creado; setup Python/MJX omitido por -NoSetup."
   exit 0
 fi
 
 install_args=(--skip-system-packages --accelerator "${resolved_accelerator}")
 if (( SKIP_GPU_CHECK == 1 )); then install_args+=(--skip-gpu-check); fi
-if (( ENABLE_EXPERIMENTAL_AMD_WSL == 1 )); then install_args+=(--enable-experimental-amd-wsl); fi
 bash "${workspace}/scripts/install_wsl.sh" "${install_args[@]}"
+
+profile_tmp="${RUNTIME_ROOT}/accelerator.profile.tmp.$$"
+printf '%s\n' "${resolved_accelerator}" > "${profile_tmp}"
+mv -f "${profile_tmp}" "${RUNTIME_ROOT}/accelerator.profile"
+rm -f -- "${RUNTIME_ROOT}/amd-wsl-experimental.opt-in"
+echo "Perfil persistido para este runtime: ${resolved_accelerator}"
 
 echo "Runtime preparado en: ${workspace}"

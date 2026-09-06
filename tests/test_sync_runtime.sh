@@ -18,8 +18,13 @@ if [[ "${TARANTULIN_TEST_GENERIC_LINUX:-0}" == "1" ]] ||
 fi
 TEST_RUNTIME="$(mktemp -d -p "${BASE}" codex-sync-test.XXXXXX)"
 MARKERLESS="$(mktemp -d -p "${BASE}" codex-markerless-test.XXXXXX)"
+lock_holder_pid=""
 
 cleanup() {
+  if [[ "${lock_holder_pid}" =~ ^[1-9][0-9]*$ ]] && kill -0 "${lock_holder_pid}" 2>/dev/null; then
+    kill "${lock_holder_pid}" 2>/dev/null || true
+    wait "${lock_holder_pid}" 2>/dev/null || true
+  fi
   case "${TEST_RUNTIME}" in "${BASE}"/codex-sync-test.*) rm -rf -- "${TEST_RUNTIME}" ;; esac
   case "${MARKERLESS}" in "${BASE}"/codex-markerless-test.*) rm -rf -- "${MARKERLESS}" ;; esac
   case "${FAKE_WSL_BIN}" in "${BASE}"/codex-fake-wsl.*) rm -rf -- "${FAKE_WSL_BIN}" ;; esac
@@ -31,6 +36,33 @@ bash "${SOURCE_ROOT}/scripts/wsl/sync_runtime.sh" \
 test -f "${TEST_RUNTIME}/.tarantulin-runtime"
 test -f "${TEST_RUNTIME}/sync-manifest.sha256"
 test -f "${TEST_RUNTIME}/workspace/pyproject.toml"
+
+# Un proceso de calculo, visor o terminal mantiene el bloqueo compartido. Ni la
+# sincronizacion ni setup pueden reemplazar el codigo mientras ese proceso vive.
+lock_ready="${TEST_RUNTIME}/lock-ready"
+flock --no-fork --shared "${TEST_RUNTIME}/runtime.lock" \
+  bash -c 'touch "$1"; sleep 30' _ "${lock_ready}" &
+lock_holder_pid=$!
+for _ in $(seq 1 50); do
+  [[ -f "${lock_ready}" ]] && break
+  sleep 0.02
+done
+test -f "${lock_ready}"
+if bash "${SOURCE_ROOT}/scripts/wsl/sync_runtime.sh" \
+  --source "${SOURCE_ROOT}" --runtime "${TEST_RUNTIME}" --source-id "${SOURCE_ID}" >/dev/null 2>&1; then
+  echo "ERROR: la sincronizacion entro mientras el runtime estaba en uso" >&2
+  exit 1
+fi
+if bash "${SOURCE_ROOT}/scripts/wsl/run_runtime.sh" \
+  --source "${SOURCE_ROOT}" --runtime "${TEST_RUNTIME}" --source-id "${SOURCE_ID}" \
+  --accelerator cpu -- setup >/dev/null 2>&1; then
+  echo "ERROR: setup entro mientras el runtime estaba en uso" >&2
+  exit 1
+fi
+kill "${lock_holder_pid}"
+wait "${lock_holder_pid}" 2>/dev/null || true
+lock_holder_pid=""
+rm -f -- "${lock_ready}"
 
 mkdir -p \
   "${TEST_RUNTIME}/workspace/external" \
